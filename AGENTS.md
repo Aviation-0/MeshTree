@@ -12,7 +12,7 @@ All AI agents working in this repository (IDE orchestrator or terminal CLI) foll
    - `cargo clippy --workspace -- -D warnings`
    - `cargo build --workspace`
    - `cargo test --workspace`
-5. Commit per task with the message `T-0XX: short summary`. Keep diffs reviewable by a human in one sitting.
+5. Commit per task with the message `T-0XX: short summary`. Keep diffs reviewable by a human in one sitting. Commits must strictly be authored and committed by the configured repo user (`Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`). Never append `Co-authored-by:` trailers or inject agent attribution into commit messages.
 6. Before ending any session, update both `docs/tasks/backlog.md` and `docs/tasks/PROGRESS.md` (milestone counts, current focus, next up), append a dated handoff entry under `## Handoff log` in `docs/tasks/backlog.md` (current task, state, what's done, what's next, failing tests if any), and commit.
 7. CI runs on a 3-OS matrix (Linux, macOS, Windows). Never push with failing CI. Windows-specific behavior must be written for Windows, not ported blindly from Unix.
 8. Prefer stdlib and small, well-maintained dependencies. Any new dependency requires a one-line justification in the commit message.
