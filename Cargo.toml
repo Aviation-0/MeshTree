@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/meshtree-core",
+    "crates/meshtree-platform",
+    "crates/meshtree",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+
+[workspace.dependencies]
+meshtree-core = { path = "crates/meshtree-core" }
+meshtree-platform = { path = "crates/meshtree-platform" }
+clap = { version = "4", features = ["derive"] }
+proptest = "1"
