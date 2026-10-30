@@ -5,13 +5,13 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M0 — Walking Skeleton & Core Lease Foundations` (Week 1 · Target: `2026-11-08`)
-- **In-Progress Task (`doing`):** `T-001` — `GitOps` trait + CLI-git backend — implementation complete; `fmt`/`clippy`/`check --all-targets` green locally; `cargo test` + 3-OS CI pending (host lacks MSVC `link.exe`, push to `main` not yet authorized)
+- **In-Progress Task (`doing`):** None — `T-001` done (3-OS CI run 41131551883 green on `cb69d52`)
 - **Next Up (`todo`, dependencies satisfied):**
   1. `T-002` — Config load & validation (`crates/meshtree-core`, independent pure core)
   2. `T-003` — Task model + ID allocation (`crates/meshtree-core`, independent pure core)
   3. `T-007` — Lease event model + ordering key (`crates/meshtree-core`, independent pure core)
   4. `T-009` — Path-pattern normalization + conflict rule (`crates/meshtree-core`, independent pure core)
-- **Last Session Summary (2026-10-30, Mistral Vibe CLI):** Implemented `T-001` (`platform::gitops`: `GitOps` trait + `CliGitOps`, update-ref CAS) with the three named temp-repo integration tests; zero new dependencies (stdlib-only temp repos). Local gates: `cargo fmt --all --check`, `cargo clippy -p meshtree-platform --all-targets -- -D warnings`, `cargo check -p meshtree-platform --all-targets` pass; `cargo build`/`cargo test` cannot link on this Windows host (no MSVC `link.exe`/Windows SDK) — test execution deferred to 3-OS CI. Prior session: completed 10-week project plan (`M0`–`M6`, `T-001`–`T-038`), addressed all Round 1 plan review findings, authored `ADR-0001`, added `.gitattributes`, encoded the session ritual in `AGENTS.md`.
+- **Last Session Summary (2026-10-30, Mistral Vibe CLI):** `T-001` done — `platform::gitops` (`GitOps` trait + `CliGitOps`, update-ref CAS) with the three named temp-repo tests, zero new dependencies. First CI run failed all 3 OSes (`show-ref --verify` exits 128 for missing refs); fixed with `rev-parse --verify --quiet` + canonicalized worktree paths; run 41131551883 green on ubuntu/windows/macos. Local host cannot link (no MSVC `link.exe`), so `cargo test` execution happens on CI. Prior session: completed 10-week plan (`M0`–`M6`, `T-001`–`T-038`), Round 1 review fixes, `ADR-0001`, `.gitattributes`, session ritual in `AGENTS.md`.
 
 ---
 
@@ -19,14 +19,14 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 
 | Milestone | Window | Tasks | Total | `done` | `doing` | `blocked` | `todo` | Status |
 |---|---|---|---|---|---|---|---|---|
-| **M0 — Walking Skeleton & Core Lease Foundations** | Week 1 (`→ 2026-11-08`) | `T-001`–`T-010` | 10 | 0 | 1 | 0 | 9 | `doing` |
+| **M0 — Walking Skeleton & Core Lease Foundations** | Week 1 (`→ 2026-11-08`) | `T-001`–`T-010` | 10 | 1 | 0 | 0 | 9 | `doing` |
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 0 | 0 | 0 | 4 | `todo` |
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021` | 7 | 0 | 0 | 0 | 7 | `todo` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029` | 8 | 0 | 0 | 0 | 8 | `todo` |
 | **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033` | 4 | 0 | 0 | 0 | 4 | `todo` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036` | 3 | 0 | 0 | 0 | 3 | `todo` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-038`** | **38** | **0** | **1** | **0** | **37** | **0% (`0 / 38`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-038`** | **38** | **1** | **0** | **0** | **37** | **3% (`1 / 38`)** |
 
 ---
 
