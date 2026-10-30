@@ -600,10 +600,10 @@ git worktree remove --force .meshtree/worktrees/<task-id>
 meshtree/
 ├── crates/
 │   ├── meshtree-core/     # lease table, replay, task model, queue, handoff (pure; no fs, no git)
-│   ├── meshtree-platform/ # IPC (UDS/named pipe), locks, junction/clonefile, quarantine, WAL
-│   └── meshtree/          # bin: daemon, cli (clap), mcp (rmcp); git plumbing behind GitOps trait
+│   ├── meshtree-platform/ # IPC (UDS/named pipe), locks, junction/clonefile, quarantine, WAL, git plumbing (GitOps)
+│   └── meshtree/          # bin: daemon, cli (clap), mcp (rmcp)
 ├── xtask/                 # benchmark scenario runner
 └── .github/workflows/     # ci.yml (3-OS matrix), release.yml (cargo-dist)
 ```
 
-`meshtree-core` is the invariant-protected heart: everything in it is deterministic and property-tested; platform and git concerns live behind traits at the binary crate boundary.
+`meshtree-core` is the invariant-protected heart: everything in it is deterministic and property-tested; platform, filesystem, and git concerns live behind traits in `meshtree-platform`, keeping the `meshtree` binary crate a thin surface layer.
