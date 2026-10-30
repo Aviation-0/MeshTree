@@ -65,6 +65,12 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 
 ## Handoff log
 
+- **2026-10-30 (Mistral Vibe CLI · `T-001` CI fix):**
+  - **Current task:** `T-001` — CI run 41130891270 (push `de545ab`) failed on all 3 OSes at `cargo test --workspace` (exit 101).
+  - **Root cause:** `ref_read` used `git show-ref --verify --hash`, which exits **128** (not 1) for a missing ref, so `ref_read` returned `Err` instead of `None` and `gitops_ref_read_and_rev_parse` panicked. Fixed by switching to `git rev-parse --verify --quiet` (exit 1 = missing, verified against git 2.56). Also hardened `gitops_worktree_add_list_remove` to compare canonicalized worktree paths (git realpaths entries; macOS `/var`→`/private/var`, Windows 8.3 short names).
+  - **What's done:** fix committed locally; `cargo fmt --all --check`, `cargo clippy -p meshtree-platform --all-targets -- -D warnings`, `cargo check -p meshtree-platform --all-targets` green. Re-pushed to `main`; monitoring new run.
+  - **Failing tests:** fixed root cause; execution still only possible on CI (host lacks MSVC linker).
+
 - **2026-10-30 (Mistral Vibe CLI · `T-001`):**
   - **Current task:** `T-001` — `GitOps` trait + CLI-git backend (`crates/meshtree-platform`, module `gitops`)
   - **State:** Implementation complete; status `doing` (not `done`: AGENTS.md order 4 also requires green 3-OS CI, and local `cargo build`/`cargo test` cannot link on this host — no MSVC `link.exe`/Windows SDK, a pre-existing limitation also noted in the 2026-10-30 architect entry).

@@ -86,8 +86,8 @@ pub trait GitOps {
     fn worktree_list(&self) -> Result<Vec<WorktreeInfo>, GitError>;
     /// `git rev-parse <rev>` → resolved OID.
     fn rev_parse(&self, rev: &str) -> Result<String, GitError>;
-    /// `git show-ref --verify --hash <reference>` → OID, or `None` when the
-    /// ref does not exist.
+    /// `git rev-parse --verify --quiet <reference>` → OID, or `None` when
+    /// the ref does not exist.
     fn ref_read(&self, reference: &str) -> Result<Option<String>, GitError>;
     /// `git update-ref <reference> <new-oid> [<expected-old-oid>]` — the local
     /// CAS primitive (Appendix A). `Some(expected_old)` must match the
@@ -211,15 +211,17 @@ impl GitOps for CliGitOps {
 
     fn ref_read(&self, reference: &str) -> Result<Option<String>, GitError> {
         match self.run(&[
-            OsStr::new("show-ref"),
+            OsStr::new("rev-parse"),
             OsStr::new("--verify"),
-            OsStr::new("--hash"),
+            OsStr::new("--quiet"),
             OsStr::new(reference),
         ]) {
             Ok(output) => Ok(Some(
                 String::from_utf8_lossy(&output.stdout).trim().to_string(),
             )),
-            // `show-ref --verify` exits 1 when the ref does not exist.
+            // `rev-parse --verify --quiet` exits 1 (silently) when the ref
+            // does not exist. (`show-ref --verify` exits 128 there, which is
+            // why rev-parse is used instead.)
             Err(GitError::NonZeroExit { code: Some(1), .. }) => Ok(None),
             Err(e) => Err(e),
         }

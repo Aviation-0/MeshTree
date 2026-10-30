@@ -75,9 +75,14 @@ fn gitops_worktree_add_list_remove() {
 
     let list = ops.worktree_list().expect("worktree list");
     assert_eq!(list.len(), 2, "primary + new worktree");
+    // Compare canonicalized paths: git realpaths worktree entries, which
+    // differs from `temp_dir()` on macOS (/var → /private/var) and on
+    // Windows runners (8.3 short names).
+    let wt_canon = fs::canonicalize(&wt).expect("canonicalize new worktree");
+    let canon_eq = |p: &Path| fs::canonicalize(p).map(|c| c == wt_canon).unwrap_or(false);
     let added = list
         .iter()
-        .find(|w| w.path == wt)
+        .find(|w| canon_eq(&w.path))
         .expect("new worktree listed");
     assert_eq!(added.branch.as_deref(), Some("refs/heads/meshtree/t-001"));
     assert_eq!(added.head, ops.rev_parse("main").unwrap());
@@ -85,7 +90,7 @@ fn gitops_worktree_add_list_remove() {
     ops.worktree_remove(&wt).expect("worktree remove");
     let list = ops.worktree_list().expect("worktree list after remove");
     assert_eq!(list.len(), 1, "only the primary worktree remains");
-    assert!(list.iter().all(|w| w.path != wt));
+    assert!(list.iter().all(|w| !canon_eq(&w.path)));
 }
 
 #[test]
