@@ -22,7 +22,7 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 
 | ID | MS | Status | Title | Deps | Scope | Authority | Exit criterion |
 |---|---|---|---|---|---|---|---|
-| `T-001` | M0 | `todo` | `GitOps` trait + CLI-git backend | — | `crates/meshtree-platform` (module `gitops`) | `SPEC` §4, §8, §9, App. A, App. B (`ADR-0001`) | Named temp-repo integration tests `gitops_worktree_add_list_remove`, `gitops_ref_read_and_rev_parse`, and `gitops_update_ref_cas_accepts_and_rejects` pass on Linux, macOS, and Windows. |
+| `T-001` | M0 | `doing` | `GitOps` trait + CLI-git backend | — | `crates/meshtree-platform` (module `gitops`) | `SPEC` §4, §8, §9, App. A, App. B (`ADR-0001`) | Named temp-repo integration tests `gitops_worktree_add_list_remove`, `gitops_ref_read_and_rev_parse`, and `gitops_update_ref_cas_accepts_and_rejects` pass on Linux, macOS, and Windows. |
 | `T-002` | M0 | `todo` | Config load & validation | — | `crates/meshtree-core` (module `config`) | `SPEC` §6, §11, §12, §16 (`MT-050`) | Serde parse of `.meshtree/config.toml` spec fields and typed `MT-050` errors; named unit tests `config_parses_spec_example` and `config_rejects_invalid_fields_with_mt050` pass. |
 | `T-003` | M0 | `todo` | Task model + ID allocation | — | `crates/meshtree-core` (module `task`) | `SPEC` §7, §8 | `Task` record, `"t-" + ULID` ID allocation, and §8 state transitions; named unit tests `task_id_ulid_format_and_monotonic`, `task_json_serde_roundtrip`, and `task_status_state_machine_transitions` pass. |
 | `T-004` | M0 | `todo` | `meshtree init` CLI | `T-002` | `crates/meshtree` | `SPEC` §5, §6, §14, §16 | Writes `.meshtree/config.toml` template idempotently and initializes `.meshtree/`; named integration tests `init_writes_valid_template` and `init_twice_is_idempotent` pass. |
@@ -64,6 +64,13 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 ---
 
 ## Handoff log
+
+- **2026-10-30 (Mistral Vibe CLI · `T-001`):**
+  - **Current task:** `T-001` — `GitOps` trait + CLI-git backend (`crates/meshtree-platform`, module `gitops`)
+  - **State:** Implementation complete; status `doing` (not `done`: AGENTS.md order 4 also requires green 3-OS CI, and local `cargo build`/`cargo test` cannot link on this host — no MSVC `link.exe`/Windows SDK, a pre-existing limitation also noted in the 2026-10-30 architect entry).
+  - **What's done:** `GitOps` trait + `CliGitOps` (git CLI via `-C`, `--porcelain` worktree list, `show-ref --verify --hash` ref reads, `update-ref` CAS with `CasRejected` on stale expected OID) per SPEC §4/§8/§9/App. A and ADR-0001; three named temp-repo integration tests `gitops_worktree_add_list_remove`, `gitops_ref_read_and_rev_parse`, `gitops_update_ref_cas_accepts_and_rejects` (stdlib-only temp repos, zero new dependencies). Verified locally: `cargo fmt --all --check`, `cargo clippy -p meshtree-platform --all-targets -- -D warnings`, `cargo clippy -p meshtree-core -p meshtree-platform -- -D warnings`, `cargo check -p meshtree-platform --all-targets` all pass.
+  - **What's next:** `cargo test` execution + 3-OS CI require a push/PR (not done — push to `main` needs authorization); then `T-002` (config), `T-003` (task model), `T-007`, `T-009` (all dep-free).
+  - **Failing tests:** None known; tests compile but were not executed locally (linker unavailable).
 
 - **2026-10-30 (Project Architect · `mc-lucas-win`):**
   - **Current task:** Project plan & review amendment (pre-`T-001`)
