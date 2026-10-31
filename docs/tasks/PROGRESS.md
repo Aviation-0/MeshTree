@@ -5,7 +5,7 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate` (Week 3 · Target: `2026-11-22`)
-- **In-Progress Task (`doing`):** None
+- **In-Progress Task (`doing`):** `T-046` — Unix socket path-length fallback (`ADR-0007`) (Claude Opus 5.5, Windows)
 - **Next Up (`todo`, dependencies satisfied):**
   1. `T-026` — Handoff record model, `HANDOFF.md` & `AGENTS.md` byte-stable snapshots (`crates/meshtree-core`)
   2. `T-039` — Integration-branch remote sync (non-ff retry ×5) (`crates/meshtree`)
@@ -28,12 +28,12 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 |---|---|---|---|---|---|---|---|---|
 | **M0 — Walking Skeleton & Core Lease Foundations** | Week 1 (`→ 2026-11-08`) | `T-001`–`T-010` | 10 | 10 | 0 | 0 | 0 | `done` |
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 4 | 0 | 0 | 0 | `done` |
-| **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 8 | 0 | 0 | 4 | `doing` |
+| **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 8 | 1 | 0 | 3 | `doing` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 4 | 0 | 0 | 5 | `doing` |
 | **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033` | 4 | 0 | 0 | 0 | 4 | `todo` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042` | 5 | 0 | 0 | 0 | 5 | `todo` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **26** | **0** | **0** | **20** | **57% (`26 / 46`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **26** | **1** | **0** | **19** | **57% (`26 / 46`)** |
 
 ---
 
