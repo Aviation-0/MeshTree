@@ -4,3 +4,4 @@
 
 pub mod coord;
 pub mod gitops;
+pub mod ipc;

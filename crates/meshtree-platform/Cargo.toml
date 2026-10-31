@@ -6,6 +6,5 @@ rust-version.workspace = true
 
 [dependencies]
 meshtree-core.workspace = true
-
-[dev-dependencies]
+serde.workspace = true
 serde_json.workspace = true
