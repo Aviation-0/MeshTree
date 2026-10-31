@@ -15,6 +15,16 @@ pub fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Current time as nanoseconds since the Unix epoch; used as the lease
+/// event `counter` so later events from this machine always order after
+/// earlier ones, even within one millisecond and across processes.
+pub fn now_unix_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
 /// 128 bits of per-call entropy for ULID allocation.
 ///
 /// Uses the std `RandomState` keys (randomly seeded per process, distinct per

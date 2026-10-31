@@ -1,14 +1,13 @@
 //! `meshtree abort <task-id>`: discard a task (`SPEC.md` §8 `abort`, §14, §16).
 //!
-//! Removes the task worktree, then records `active → abandoned`. The task
-//! branch is kept so discarded work stays recoverable. Claim release lands
-//! with claims (`T-014`); retry-with-backoff and quarantine on locked files
-//! land in `T-024`, so a removal failure here leaves the task `active` for
-//! a retry.
+//! Releases the task's claims, removes its worktree, then records
+//! `active → abandoned`. The task branch is kept so discarded work stays
+//! recoverable. Retry-with-backoff and quarantine on locked files land in
+//! `T-024`, so a removal failure here leaves the task `active` for a retry.
 
 use crate::exit::{CliError, PLATFORM, TASK, USAGE};
-use crate::registry;
-use crate::repo::require_repo_root;
+use crate::repo::{load_config, require_repo_root};
+use crate::{claims, registry};
 use meshtree_core::{Task, TaskError, TaskId, TaskStatus};
 use meshtree_platform::gitops::{CliGitOps, GitOps};
 use std::path::Path;
@@ -29,6 +28,14 @@ pub fn run(cwd: &Path, task_id: &str) -> Result<Task, CliError> {
             TaskStatus::Abandoned
         ));
         return Err(CliError::new(TASK, err.to_string()));
+    }
+
+    // Release first: if the coordination ref cannot be written, nothing
+    // else has changed and the abort can simply be retried.
+    if !task.claims.is_empty() {
+        let config = load_config(&repo_root)?;
+        claims::release(&repo_root, &config, &task.id, &task.claims)?;
+        task.claims.clear();
     }
 
     let worktree = repo_root.join(&task.worktree);

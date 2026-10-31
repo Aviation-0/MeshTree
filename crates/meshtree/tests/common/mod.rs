@@ -42,6 +42,23 @@ impl TempDir {
         dir
     }
 
+    /// A bare repository standing in for the GitHub remote.
+    pub fn bare() -> Self {
+        let dir = Self::new();
+        git(dir.path(), &["init", "-q", "--bare"]);
+        dir
+    }
+
+    /// `file://` URL for this directory (`file:///C:/…` on Windows).
+    pub fn file_url(&self) -> String {
+        let path = self.0.to_string_lossy().replace('\\', "/");
+        if path.starts_with('/') {
+            format!("file://{path}")
+        } else {
+            format!("file:///{path}")
+        }
+    }
+
     pub fn path(&self) -> &Path {
         &self.0
     }

@@ -1,4 +1,5 @@
 mod abort;
+mod claims;
 mod clock;
 mod exit;
 mod init;
@@ -33,6 +34,9 @@ enum Command {
         /// Agent identifier
         #[arg(long)]
         agent: Option<String>,
+        /// Path pattern to claim (repeatable)
+        #[arg(long = "claim", value_name = "GLOB")]
+        claims: Vec<String>,
     },
     /// List tasks from the local registry, or show one task
     Status {
@@ -42,11 +46,29 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Discard an active task: remove its worktree and mark it abandoned
+    /// Discard an active task: release claims, remove its worktree, mark it abandoned
     Abort {
         /// Task ID
         task_id: String,
     },
+    /// Add path claims to an active task
+    Claim {
+        /// Task ID
+        task_id: String,
+        /// Path patterns
+        #[arg(required = true, value_name = "GLOB")]
+        globs: Vec<String>,
+    },
+    /// Release path claims held by an active task
+    Release {
+        /// Task ID
+        task_id: String,
+        /// Path patterns
+        #[arg(required = true, value_name = "GLOB")]
+        globs: Vec<String>,
+    },
+    /// Flush local claim events and pull remote ones (refs/meshtree/coord)
+    Sync,
 }
 
 fn main() -> ExitCode {
@@ -93,11 +115,25 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
             Ok(())
         }
-        Some(Command::Spawn { name, base, agent }) => {
-            let report = spawn::run(&current_dir()?, spawn::SpawnArgs { name, base, agent })?;
+        Some(Command::Spawn {
+            name,
+            base,
+            agent,
+            claims,
+        }) => {
+            let args = spawn::SpawnArgs {
+                name,
+                base,
+                agent,
+                claims,
+            };
+            let report = spawn::run(&current_dir()?, args)?;
             println!("task_id: {}", report.task.id);
             println!("branch: {}", report.task.branch);
             println!("worktree: {}", report.worktree_path.display());
+            for path in &report.task.claims {
+                println!("claim: {path}");
+            }
             Ok(())
         }
         Some(Command::Status { task_id, json }) => {
@@ -113,6 +149,41 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("{} {}", task.status, task.id);
             Ok(())
         }
+        Some(Command::Claim { task_id, globs }) => {
+            let report = claims::claim(&current_dir()?, &task_id, &globs)?;
+            print_claim_report("claimed", &report);
+            Ok(())
+        }
+        Some(Command::Release { task_id, globs }) => {
+            let report = claims::release_cmd(&current_dir()?, &task_id, &globs)?;
+            print_claim_report("released", &report);
+            Ok(())
+        }
+        Some(Command::Sync) => {
+            let (outcome, revoked, _) = claims::sync(&current_dir()?)?;
+            println!("{}", claims::push_status(&outcome));
+            println!("leases: {}", outcome.replay.leases.len());
+            for r in &revoked {
+                eprintln!(
+                    "meshtree: [{}] {} lost {} to {}; claim revoked",
+                    meshtree_core::ERROR_CODE_CLAIM_CONFLICT,
+                    r.task,
+                    r.path,
+                    r.holder
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn print_claim_report(verb: &str, report: &claims::Report) {
+    for path in &report.paths {
+        println!("{verb} {path}");
+    }
+    println!("{}", claims::push_status(&report.outcome));
+    if let Some(reason) = &report.outcome.deferred {
+        eprintln!("meshtree: push deferred ({reason}); run `meshtree sync` later");
     }
 }
 

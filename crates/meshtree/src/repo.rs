@@ -49,6 +49,47 @@ pub fn load_config(repo_root: &Path) -> Result<Config, CliError> {
         .map_err(|err| CliError::new(USAGE, format!("{err} ({})", path.display())))
 }
 
+/// Machine identifier: `[machine].id` from config, else `mc-<hostname>`.
+/// Full OS machine-id derivation belongs to the platform layer (`T-016`).
+pub fn machine_id(config: &Config) -> String {
+    if let Some(id) = config.machine.as_ref().and_then(|m| m.id.clone()) {
+        return id;
+    }
+    hostname()
+        .map(|host| format!("mc-{host}"))
+        .unwrap_or_else(|| "mc-local".to_string())
+}
+
+/// Host name, lowercased with characters outside `[a-z0-9-]` mapped to `-`.
+/// `COMPUTERNAME` is always set on Windows; `HOSTNAME` is usually a
+/// non-exported shell variable on Unix, so fall back to the `hostname`
+/// command, which exists on all three OSes.
+fn hostname() -> Option<String> {
+    let raw = ["COMPUTERNAME", "HOSTNAME"]
+        .iter()
+        .filter_map(|var| std::env::var(var).ok())
+        .find(|host| !host.trim().is_empty())
+        .or_else(|| {
+            let out = std::process::Command::new("hostname").output().ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        })?;
+    let host: String = raw
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    (!host.is_empty()).then_some(host)
+}
+
 /// Maps an I/O failure on `path` to a §14 platform error.
 pub fn platform_error(path: &Path, err: &io::Error) -> CliError {
     CliError::new(PLATFORM, format!("{}: {err}", path.display()))
