@@ -502,7 +502,7 @@ impl GitOps for CliGitOps {
             expected_old.unwrap_or("")
         );
         // Neither `--porcelain` nor `--quiet`: the per-ref rejection reason
-        // ("stale info") must land on stderr, which `NonZeroExit` captures.
+        // must land on stderr, which `NonZeroExit` captures.
         let args = [
             OsStr::new("push"),
             OsStr::new(&lease),
@@ -511,11 +511,7 @@ impl GitOps for CliGitOps {
         ];
         match self.run(&args) {
             Ok(_) => Ok(()),
-            Err(GitError::NonZeroExit { stderr, .. })
-                if stderr.contains("stale info")
-                    || stderr.contains("[rejected]")
-                    || stderr.contains("fetch first") =>
-            {
+            Err(GitError::NonZeroExit { stderr, .. }) if lost_push_race(&stderr) => {
                 Err(GitError::RemoteCasRejected {
                     remote: remote.to_string(),
                     reference: reference.to_string(),
@@ -527,7 +523,57 @@ impl GitOps for CliGitOps {
     }
 }
 
+/// `true` if a failed `push --force-with-lease` lost a race rather than
+/// failing for network/auth reasons. Two shapes exist:
+/// - client side: the advertised remote value no longer matches the lease
+///   (`[rejected] … (stale info)`, or `(fetch first)` for non-fast-forward);
+/// - server side: both pushers passed the client check concurrently and the
+///   remote's ref lock refused the loser (`[remote rejected] … (failed to
+///   update ref | cannot lock ref | incorrect old value | reference already
+///   exists)`).
+fn lost_push_race(stderr: &str) -> bool {
+    let client_side = stderr.contains("stale info")
+        || stderr.contains("[rejected]")
+        || stderr.contains("fetch first");
+    let server_side = stderr.contains("[remote rejected]")
+        && [
+            "failed to update ref",
+            "cannot lock ref",
+            "incorrect old value",
+            "already exists",
+            "failed to lock",
+        ]
+        .iter()
+        .any(|reason| stderr.contains(reason));
+    client_side || server_side
+}
+
 /// First line of stdout, trimmed (an OID for the plumbing commands above).
 fn stdout_line(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lost_push_race;
+
+    #[test]
+    fn push_race_classification() {
+        for lost in [
+            " ! [rejected]        abc -> refs/meshtree/coord (stale info)\nerror: failed to push some refs",
+            " ! [rejected]        abc -> refs/meshtree/coord (fetch first)",
+            " ! [remote rejected] abc -> refs/meshtree/coord (failed to update ref)",
+            " ! [remote rejected] abc -> refs/meshtree/coord (cannot lock ref 'refs/meshtree/coord': reference already exists)",
+            " ! [remote rejected] abc -> refs/meshtree/coord (incorrect old value provided)",
+        ] {
+            assert!(lost_push_race(lost), "{lost}");
+        }
+        for other in [
+            "fatal: '/nonexistent' does not appear to be a git repository\nfatal: Could not read from remote repository.",
+            "fatal: Authentication failed for 'https://example.com/repo.git/'",
+            " ! [remote rejected] abc -> refs/meshtree/coord (pre-receive hook declined)",
+        ] {
+            assert!(!lost_push_race(other), "{other}");
+        }
+    }
 }

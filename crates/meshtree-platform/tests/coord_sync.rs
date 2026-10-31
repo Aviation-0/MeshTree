@@ -188,7 +188,7 @@ fn two_clones_file_remote_cas_race_converges() {
     for out in [&race_mac, &race_win] {
         assert!(out.attempts <= MAX_ATTEMPTS);
         assert!(out.pushed, "{out:?}");
-        assert!(out.deferred.is_none() && out.issues.is_empty());
+        assert!(out.deferred.is_none() && out.issues.is_empty(), "{out:?}");
     }
     assert!(
         race_mac.attempts.max(race_win.attempts) >= 2,
