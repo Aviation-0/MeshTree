@@ -1,8 +1,11 @@
+mod abort;
 mod clock;
 mod exit;
 mod init;
+mod registry;
 mod repo;
 mod spawn;
+mod status;
 
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
@@ -30,6 +33,19 @@ enum Command {
         /// Agent identifier
         #[arg(long)]
         agent: Option<String>,
+    },
+    /// List tasks from the local registry, or show one task
+    Status {
+        /// Task ID (default: all tasks)
+        task_id: Option<String>,
+        /// Print task records as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Discard an active task: remove its worktree and mark it abandoned
+    Abort {
+        /// Task ID
+        task_id: String,
     },
 }
 
@@ -82,6 +98,19 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("task_id: {}", report.task.id);
             println!("branch: {}", report.task.branch);
             println!("worktree: {}", report.worktree_path.display());
+            Ok(())
+        }
+        Some(Command::Status { task_id, json }) => {
+            let out = status::run(&current_dir()?, task_id.as_deref(), json)?;
+            for warning in &out.warnings {
+                eprintln!("meshtree: {warning}");
+            }
+            print!("{}", out.stdout);
+            Ok(())
+        }
+        Some(Command::Abort { task_id }) => {
+            let task = abort::run(&current_dir()?, &task_id)?;
+            println!("{} {}", task.status, task.id);
             Ok(())
         }
     }

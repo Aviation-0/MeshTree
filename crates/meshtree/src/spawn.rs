@@ -7,12 +7,11 @@
 //! Dependency sharing (step 3) lands in `T-023`; the coordination-ref
 //! registry (step 4, `tasks/<id>.json`) and `--claim` land in `T-013`/`T-014`.
 
-use crate::clock;
 use crate::exit::{CliError, PLATFORM, USAGE};
-use crate::repo::{load_config, platform_error, require_repo_root, MESHTREE_DIR};
+use crate::repo::{load_config, require_repo_root};
+use crate::{clock, registry};
 use meshtree_core::{Config, Task, TaskIdAllocator, TaskSpec, TaskStatus};
 use meshtree_platform::gitops::{CliGitOps, GitOps};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Arguments of `meshtree spawn`.
@@ -68,18 +67,13 @@ pub fn run(cwd: &Path, args: SpawnArgs) -> Result<SpawnReport, CliError> {
     );
 
     // Register as `spawning` first so a crash mid-setup leaves a record.
-    let task_dir = repo_root
-        .join(MESHTREE_DIR)
-        .join("tasks")
-        .join(task.id.as_str());
-    fs::create_dir_all(&task_dir).map_err(|err| platform_error(&task_dir, &err))?;
-    write_task_json(&task_dir, &task)?;
+    registry::write_task(&repo_root, &task)?;
 
     // Step 2: git worktree add -b meshtree/<id> .meshtree/worktrees/<id> <base>.
     let worktree_path = repo_root.join(&task.worktree);
     if let Err(err) = git.worktree_add(&worktree_path, &task.branch, &task.base) {
         transition(&mut task, TaskStatus::Failed)?;
-        write_task_json(&task_dir, &task)?;
+        registry::write_task(&repo_root, &task)?;
         return Err(CliError::new(
             PLATFORM,
             format!("{}: worktree setup failed: {err}", task.id),
@@ -87,7 +81,7 @@ pub fn run(cwd: &Path, args: SpawnArgs) -> Result<SpawnReport, CliError> {
     }
 
     transition(&mut task, TaskStatus::Active)?;
-    write_task_json(&task_dir, &task)?;
+    registry::write_task(&repo_root, &task)?;
 
     Ok(SpawnReport {
         task,
@@ -95,34 +89,49 @@ pub fn run(cwd: &Path, args: SpawnArgs) -> Result<SpawnReport, CliError> {
     })
 }
 
-/// Machine identifier: `[machine].id` from config, else derived from the host
-/// name. Full OS machine-id derivation belongs to the platform layer (`T-016`).
+/// Machine identifier: `[machine].id` from config, else `mc-<hostname>`.
+/// Full OS machine-id derivation belongs to the platform layer (`T-016`).
 fn machine_id(config: &Config) -> String {
     if let Some(id) = config.machine.as_ref().and_then(|m| m.id.clone()) {
         return id;
     }
-    ["COMPUTERNAME", "HOSTNAME"]
+    hostname()
+        .map(|host| format!("mc-{host}"))
+        .unwrap_or_else(|| "mc-local".to_string())
+}
+
+/// Host name, lowercased with characters outside `[a-z0-9-]` mapped to `-`.
+/// `COMPUTERNAME` is always set on Windows; `HOSTNAME` is usually a
+/// non-exported shell variable on Unix, so fall back to the `hostname`
+/// command, which exists on all three OSes.
+fn hostname() -> Option<String> {
+    let raw = ["COMPUTERNAME", "HOSTNAME"]
         .iter()
         .filter_map(|var| std::env::var(var).ok())
         .find(|host| !host.trim().is_empty())
-        .map(|host| format!("mc-{}", host.trim().to_lowercase()))
-        .unwrap_or_else(|| "mc-local".to_string())
+        .or_else(|| {
+            let out = std::process::Command::new("hostname").output().ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        })?;
+    let host: String = raw
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    (!host.is_empty()).then_some(host)
 }
 
 fn transition(task: &mut Task, next: TaskStatus) -> Result<(), CliError> {
     // Spawn only walks legal §8 edges, so MT-004 here is an internal bug.
     task.transition(next)
         .map_err(|err| CliError::new(crate::exit::TASK, err.to_string()))
-}
-
-/// Writes `task.json` via a temp file and rename so readers never see a
-/// partial record.
-fn write_task_json(task_dir: &Path, task: &Task) -> Result<(), CliError> {
-    let mut json = serde_json::to_string_pretty(task)
-        .map_err(|err| CliError::new(PLATFORM, format!("serialize task.json: {err}")))?;
-    json.push('\n');
-    let tmp = task_dir.join("task.json.tmp");
-    let path = task_dir.join("task.json");
-    fs::write(&tmp, json).map_err(|err| platform_error(&tmp, &err))?;
-    fs::rename(&tmp, &path).map_err(|err| platform_error(&path, &err))
 }

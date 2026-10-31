@@ -66,9 +66,9 @@ fn spawn_creates_worktree_branch_and_task_json() {
     assert_eq!(task.base, "main");
     assert_eq!(task.status, TaskStatus::Active);
     assert!(task.claims.is_empty());
-    let config = Config::from_toml_str(Config::template()).unwrap();
-    let expected_machine = config.machine.and_then(|m| m.id).unwrap();
-    assert_eq!(task.machine, expected_machine);
+    // The template sets no [machine] id, so it is derived from the host.
+    assert!(task.machine.starts_with("mc-"), "machine: {}", task.machine);
+    assert!(task.machine.len() > "mc-".len());
     assert_eq!(task.created_at.len(), "2026-11-03T14:02:11Z".len());
     assert!(task.created_at.ends_with('Z'));
     assert!(!repo
@@ -108,6 +108,17 @@ fn spawn_with_base_flag_checks_out_that_ref() {
         git(repo.path(), &["rev-parse", "dev"])
     );
     assert_eq!(read_task(repo.path(), &id).base, "dev");
+}
+
+#[test]
+fn spawn_uses_configured_machine_id() {
+    let repo = initialized_repo();
+    let config = Config::template().replace("# id = \"custom-id\"", "id = \"mc-test-box\"");
+    assert_ne!(config, Config::template());
+    fs::write(repo.path().join(".meshtree/config.toml"), config).unwrap();
+
+    let id = spawn_ok(repo.path(), &["with-machine"]);
+    assert_eq!(read_task(repo.path(), &id).machine, "mc-test-box");
 }
 
 #[test]

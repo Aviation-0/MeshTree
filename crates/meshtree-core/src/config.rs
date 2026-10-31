@@ -116,7 +116,7 @@ concurrency = 1
 command = "npm run build"
 
 [machine]                          # optional; auto-derived from OS machine-id if absent
-id = "mc-lucas-mac"
+# id = "custom-id" # Optional: defaults to system hostname if omitted
 "#
     }
 
@@ -579,6 +579,8 @@ id = ""
             .expect("Config::template() must parse and validate cleanly");
         assert_eq!(config.project.base_branch, "main");
         assert_eq!(config.share.len(), 2);
+        // No machine id is baked into the template: each machine derives its own.
+        assert_eq!(config.machine.and_then(|m| m.id), None);
     }
 
     #[test]
