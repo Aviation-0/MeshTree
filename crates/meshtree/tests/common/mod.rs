@@ -11,7 +11,30 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Once;
 use std::time::{Duration, Instant};
+
+/// On GitHub Actions, also prints each test panic as an `::error::`
+/// workflow command: annotations are readable through the public API,
+/// while job logs require a signed-in browser.
+fn annotate_panics_in_ci() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        if std::env::var_os("GITHUB_ACTIONS").is_none() {
+            return;
+        }
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let text = info
+                .to_string()
+                .replace('%', "%25")
+                .replace('\r', "")
+                .replace('\n', "%0A");
+            println!("::error title=meshtree test panic::{text}");
+            previous(info);
+        }));
+    });
+}
 
 /// Temporary directory removed on drop.
 pub struct TempDir(PathBuf);
@@ -20,6 +43,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl TempDir {
     pub fn new() -> Self {
+        annotate_panics_in_ci();
         let mut path = std::env::temp_dir();
         path.push(format!(
             "meshtree-cli-test-{}-{}",

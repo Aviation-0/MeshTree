@@ -35,7 +35,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -103,6 +103,7 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         repo_root,
         config,
         started_ms,
+        recovery_ms: AtomicU64::new(0),
         ops: Mutex::new(Inner {
             wal: opened.wal,
             journaled: state.tasks.keys().cloned().collect(),
@@ -119,7 +120,13 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
     });
 
     // Recover before accepting clients (§10 Crash safety).
-    match daemon.recover(&state) {
+    let recovery_start = std::time::Instant::now();
+    let recovered = daemon.recover(&state);
+    daemon.recovery_ms.store(
+        u64::try_from(recovery_start.elapsed().as_millis()).unwrap_or(u64::MAX),
+        Ordering::SeqCst,
+    );
+    match recovered {
         Ok(report) => {
             if let Some(summary) = report.summary() {
                 note!("{summary}");
@@ -274,6 +281,8 @@ struct Daemon {
     repo_root: PathBuf,
     config: Config,
     started_ms: u64,
+    /// Duration of startup recovery (§10 target: < 2 s), reported by `ping`.
+    recovery_ms: AtomicU64,
     /// Held for every state-changing operation (serializes clients).
     ops: Mutex<Inner>,
     /// The per-machine merge mutex (§8 `collect` step 3).
@@ -389,7 +398,10 @@ impl Daemon {
 
     fn dispatch(&self, method: &str, params: &Value) -> Result<Value, CliError> {
         match method {
-            "ping" => Ok(json!({ "pid": std::process::id() })),
+            "ping" => Ok(json!({
+                "pid": std::process::id(),
+                "recovery_ms": self.recovery_ms.load(Ordering::SeqCst),
+            })),
             "claim_paths" | "release_paths" => {
                 let raw_id = str_param(params, "task_id")?;
                 let paths = paths_param(params)?;

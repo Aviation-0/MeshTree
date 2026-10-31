@@ -6,6 +6,7 @@ mod common;
 
 use common::{assert_exit, commit, git, meshtree, DaemonProc, TempDir};
 use meshtree_core::{Task, TaskStatus};
+use meshtree_platform::ipc::{Endpoint, IpcClient};
 use meshtree_platform::wal;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -141,13 +142,23 @@ fn chaos_sigkill_daemon_mid_merge_recovers_under_2s() {
         plant_lock(lock);
     }
 
-    // Restart: recovery completes before the daemon listens, in < 2 s.
+    // Restart: recovery completes before the daemon listens, in < 2 s
+    // (measured by the daemon; process launch is excluded).
     let start = Instant::now();
     let daemon = DaemonProc::start(root);
-    let recovery = start.elapsed();
+    let restart = start.elapsed();
+    let ping = IpcClient::connect(&Endpoint::for_repo(root).unwrap())
+        .unwrap()
+        .call("ping", serde_json::json!({}))
+        .unwrap();
+    let recovery_ms = ping.result.unwrap()["recovery_ms"].as_u64().unwrap();
     assert!(
-        recovery < Duration::from_secs(2),
-        "recovery took {recovery:?}"
+        recovery_ms < 2000,
+        "recovery took {recovery_ms} ms (restart {restart:?})"
+    );
+    assert!(
+        restart < Duration::from_secs(10),
+        "restart took {restart:?}"
     );
 
     for lock in &locks {
