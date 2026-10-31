@@ -13,7 +13,6 @@
 use crate::daemon;
 use crate::exit::{CliError, DAEMON, PLATFORM, TASK};
 use crate::repo::require_repo_root;
-use meshtree_platform::ipc::ERROR_CODE_DAEMON_UNREACHABLE;
 use meshtree_platform::lock::boot_id;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -25,12 +24,8 @@ const POLL: Duration = Duration::from_millis(50);
 
 fn call(repo_root: &Path, method: &str, params: Value) -> Result<Value, CliError> {
     daemon::call(repo_root, method, params).unwrap_or_else(|| {
-        Err(CliError::new(
-            DAEMON,
-            format!(
-                "[{ERROR_CODE_DAEMON_UNREACHABLE}] daemon unreachable; start `meshtree daemon` \
-                 (shared-op queues are held by the daemon)"
-            ),
+        Err(daemon::unreachable(
+            "shared-op queues are held by the daemon",
         ))
     })
 }
@@ -99,8 +94,10 @@ fn run(command: &str, dir: &Path) -> Result<std::process::ExitStatus, CliError> 
         .map_err(|err| CliError::new(PLATFORM, format!("run `{command}`: {err}")))
 }
 
+/// `command` run through the platform shell (`cmd /C` on Windows, `sh -c`
+/// elsewhere).
 #[cfg(windows)]
-fn shell(command: &str) -> Command {
+pub fn shell(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
     let mut cmd = Command::new("cmd");
     // Verbatim: `cmd /C` parses the rest of the line itself.
@@ -108,8 +105,10 @@ fn shell(command: &str) -> Command {
     cmd
 }
 
+/// `command` run through the platform shell (`cmd /C` on Windows, `sh -c`
+/// elsewhere).
 #[cfg(not(windows))]
-fn shell(command: &str) -> Command {
+pub fn shell(command: &str) -> Command {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command);
     cmd

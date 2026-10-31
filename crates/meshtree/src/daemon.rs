@@ -19,11 +19,12 @@
 
 use crate::exit::{CliError, DAEMON, PLATFORM, TASK, USAGE};
 use crate::repo::{load_config, machine_id, require_repo_root};
-use crate::{claims, clock, registry};
+use crate::{claims, clock, merge_gate, registry};
 use meshtree_core::queue::{check_overrides, Holder, QueueTicket, SharedQueue, TICKET_ID_PREFIX};
 use meshtree_core::{Config, Task, TaskId, TaskIdAllocator, TaskStatus, Timestamp};
 use meshtree_platform::ipc::{
     Endpoint, ErrorBody, IpcClient, IpcError, IpcListener, Request, Response,
+    ERROR_CODE_DAEMON_UNREACHABLE,
 };
 use meshtree_platform::lock::{boot_id, pid_alive, same_boot, DaemonLock, LockError};
 use meshtree_platform::wal::{replay, Wal, WalOp};
@@ -54,6 +55,9 @@ macro_rules! note {
 
 /// How often a deferred coordination push is retried.
 const FLUSH_EVERY_SECS: u64 = 5;
+
+/// Interval between checks while the daemon waits for its own queue slot.
+const SLOT_POLL: Duration = Duration::from_millis(50);
 
 /// Supervisor loop granularity (also the shutdown latency).
 const TICK: Duration = Duration::from_millis(100);
@@ -105,6 +109,7 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
             journaled: state.tasks.keys().cloned().collect(),
             last_seen: BTreeMap::new(),
         }),
+        merge: Mutex::new(()),
         queues: Mutex::new(Queues {
             by_name: BTreeMap::new(),
             ids: TaskIdAllocator::new(),
@@ -139,6 +144,16 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
     say!("meshtree daemon {} stopped", std::process::id());
     drop(acquired);
     Ok(())
+}
+
+/// `MT-010` for a command that needs the daemon (`what` says why).
+pub fn unreachable(what: &str) -> CliError {
+    CliError::new(
+        DAEMON,
+        format!(
+            "[{ERROR_CODE_DAEMON_UNREACHABLE}] daemon unreachable; start `meshtree daemon` ({what})"
+        ),
+    )
 }
 
 /// Sends one request to the repository's daemon. `None` when no daemon is
@@ -243,6 +258,8 @@ struct Daemon {
     started_ms: u64,
     /// Held for every state-changing operation (serializes clients).
     ops: Mutex<Inner>,
+    /// The per-machine merge mutex (§8 `collect` step 3).
+    merge: Mutex<()>,
     /// Shared-operation queues (§12); separate from `ops` so polling a
     /// ticket never waits behind a coordination sync.
     queues: Mutex<Queues>,
@@ -285,6 +302,20 @@ impl Queues {
     }
 }
 
+/// The §8 path from `spawning` to `status` used to adopt a task.
+fn adoption_path(status: TaskStatus) -> &'static [TaskStatus] {
+    use TaskStatus::*;
+    match status {
+        Spawning => &[Spawning],
+        Active => &[Spawning, Active],
+        Collecting => &[Spawning, Active, Collecting],
+        Merging => &[Spawning, Active, Collecting, Merging],
+        Merged => &[Spawning, Active, Collecting, Merging, Merged],
+        Failed => &[Spawning, Failed],
+        Abandoned => &[Spawning, Active, Abandoned],
+    }
+}
+
 struct Inner {
     wal: Wal,
     /// Tasks with a `spawn` entry in the WAL.
@@ -301,8 +332,9 @@ impl Inner {
             .map_err(|err| CliError::new(PLATFORM, format!("WAL append: {err}")))
     }
 
-    /// Adopts a task spawned outside the daemon into the WAL (`spawn`, plus
-    /// `spawning → active` when it is active).
+    /// Adopts a task the WAL has not seen (spawned outside the daemon, or
+    /// before the WAL existed): `spawn` plus the §8 edges leading to its
+    /// current status, so later transitions replay cleanly.
     fn ensure_journaled(&mut self, task: &Task) -> Result<(), CliError> {
         if self.journaled.contains(&task.id) {
             return Ok(());
@@ -313,11 +345,11 @@ impl Inner {
             worktree: task.worktree.clone(),
             base: task.base.clone(),
         })?;
-        if task.status == TaskStatus::Active {
+        for pair in adoption_path(task.status).windows(2) {
             self.journal(WalOp::Transition {
                 task: task.id.clone(),
-                from: TaskStatus::Spawning,
-                to: TaskStatus::Active,
+                from: pair[0],
+                to: pair[1],
             })?;
         }
         self.journaled.insert(task.id.clone());
@@ -398,6 +430,11 @@ impl Daemon {
                 }))
             }
             "request_shared_op" => self.request_shared_op(params),
+            "collect_task" => {
+                let raw_id = str_param(params, "task_id")?;
+                let message = params.get("message").and_then(Value::as_str);
+                merge_gate::collect(self, &raw_id, message)
+            }
             "ticket_status" => {
                 let id = str_param(params, "ticket_id")?;
                 let mut queues = self.queues();
@@ -475,22 +512,36 @@ impl Daemon {
             command.push_str(arg);
         }
 
+        let ticket = self.issue_ticket(&name, &task.id, holder, args);
+        let mut result = json_result(serde_json::to_value(ticket))?;
+        result["command"] = json!(command);
+        result["worktree"] = json!(self.repo_root.join(&task.worktree));
+        self.lock().touch(&task.id);
+        Ok(result)
+    }
+
+    /// Issues a FIFO ticket in queue `name` (created on first use with its
+    /// configured concurrency, or 1 for an internal queue such as
+    /// `validate`).
+    fn issue_ticket(
+        &self,
+        name: &str,
+        task: &TaskId,
+        holder: Holder,
+        args: Vec<String>,
+    ) -> QueueTicket {
+        let concurrency = self.config.queue.get(name).map_or(1, |q| q.concurrency);
         let mut queues = self.queues();
         let now = now();
         queues.maintain(now);
         let ulid = queues.ids.allocate(now.unix_ms(), clock::entropy());
         let ticket_id = format!("{TICKET_ID_PREFIX}{}", &ulid.as_str()[2..]);
-        let queue = queues
+        queues
             .by_name
-            .entry(name.clone())
-            .or_insert_with(|| SharedQueue::new(name.clone(), config.concurrency));
-        let ticket = queue.request(ticket_id, task.id.clone(), holder, args, now);
-        let mut result = json_result(serde_json::to_value(ticket))?;
-        result["command"] = json!(command);
-        result["worktree"] = json!(self.repo_root.join(&task.worktree));
-        drop(queues);
-        self.lock().touch(&task.id);
-        Ok(result)
+            .entry(name.to_string())
+            .or_insert_with(|| SharedQueue::new(name, concurrency))
+            .request(ticket_id, task.clone(), holder, args, now)
+            .clone()
     }
 
     fn queues(&self) -> std::sync::MutexGuard<'_, Queues> {
@@ -571,6 +622,88 @@ impl Daemon {
                 .store(outcome.deferred.is_some(), Ordering::SeqCst),
             Err(err) => note!("flush: {}", err.message),
         }
+    }
+}
+
+impl merge_gate::Host for Daemon {
+    fn repo_root(&self) -> &Path {
+        &self.repo_root
+    }
+
+    fn config(&self) -> &Config {
+        &self.config
+    }
+
+    fn transition(&self, task: &mut Task, to: TaskStatus) -> Result<(), CliError> {
+        let mut inner = self.lock();
+        inner.ensure_journaled(task)?;
+        let from = task.status;
+        task.transition(to)
+            .map_err(|err| CliError::new(TASK, err.to_string()))?;
+        registry::write_task(&self.repo_root, task)?;
+        inner.journal(WalOp::Transition {
+            task: task.id.clone(),
+            from,
+            to,
+        })?;
+        inner.touch(&task.id);
+        Ok(())
+    }
+
+    fn with_slot<T>(
+        &self,
+        queue: &str,
+        task: &TaskId,
+        f: impl FnOnce() -> T,
+    ) -> Result<T, CliError> {
+        let holder = Holder {
+            pid: std::process::id(),
+            boot_id: self.queues().boot.clone().unwrap_or_default(),
+        };
+        let id = self.issue_ticket(queue, task, holder, Vec::new()).id;
+        loop {
+            {
+                let mut queues = self.queues();
+                queues.maintain(now());
+                match queues.find(&id) {
+                    Some(ticket) if ticket.granted => break,
+                    Some(_) => {}
+                    None => return Err(unknown_ticket(&id)),
+                }
+            }
+            std::thread::sleep(SLOT_POLL);
+        }
+        let out = f();
+        let mut queues = self.queues();
+        let now = now();
+        let _ = queues
+            .by_name
+            .values_mut()
+            .find_map(|q| q.release(&id, now));
+        Ok(out)
+    }
+
+    fn release_claims(&self, task: &mut Task) -> Result<(), CliError> {
+        if task.claims.is_empty() {
+            return Ok(());
+        }
+        let mut inner = self.lock();
+        inner.ensure_journaled(task)?;
+        let outcome = claims::release(&self.repo_root, &self.config, &task.id, &task.claims)?;
+        if outcome.deferred.is_some() {
+            self.dirty.store(true, Ordering::SeqCst);
+        }
+        inner.journal(WalOp::Release {
+            task: task.id.clone(),
+            paths: std::mem::take(&mut task.claims),
+        })?;
+        registry::write_task(&self.repo_root, task)
+    }
+
+    fn merge_mutex(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.merge
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

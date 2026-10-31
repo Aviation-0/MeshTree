@@ -539,6 +539,164 @@ impl GitOps for CliGitOps {
     }
 }
 
+/// Result of [`MergeOps::merge_no_ff`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeOutcome {
+    /// The merge commit now at `HEAD`.
+    Merged(String),
+    /// Conflicting paths; the merge was aborted and `HEAD` is unchanged.
+    Conflict(Vec<String>),
+}
+
+/// Plumbing for the serialized merge gate (`SPEC.md` §8 `collect`,
+/// `meshtree promote`), kept apart from [`GitOps`] so that trait's test
+/// doubles stay small. Each method runs in the repository or worktree the
+/// [`CliGitOps`] was created for.
+pub trait MergeOps {
+    /// `git diff --name-only -z <base>...<branch>`: paths changed on `branch`
+    /// since it diverged from `base`.
+    fn diff_names(&self, base: &str, branch: &str) -> Result<Vec<String>, GitError>;
+    /// `git merge-base --is-ancestor <ancestor> <descendant>`.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, GitError>;
+    /// `git worktree add --detach <path> <rev>`.
+    fn worktree_add_detached(&self, path: &Path, rev: &str) -> Result<(), GitError>;
+    /// `git reset --hard <rev>` then `git clean -fdq` (a pristine checkout).
+    fn reset_clean(&self, rev: &str) -> Result<(), GitError>;
+    /// `git merge --no-ff --no-edit -m <message> <branch>` into the current
+    /// `HEAD`. On conflict the merge is aborted (`git merge --abort`).
+    fn merge_no_ff(&self, branch: &str, message: &str) -> Result<MergeOutcome, GitError>;
+    /// `git merge --ff-only <rev>` into the checked-out branch.
+    fn merge_ff_only(&self, rev: &str) -> Result<(), GitError>;
+    /// The branch `HEAD` is attached to (`refs/heads/…`), or `None` if detached.
+    fn head_branch(&self) -> Result<Option<String>, GitError>;
+}
+
+impl CliGitOps {
+    /// `-c user.name=… -c user.email=…` with MeshTree's identity, unless the
+    /// repository already has one: merge commits must not fail on hosts
+    /// (CI) with no git identity.
+    fn identity_args(&self) -> Result<Vec<String>, GitError> {
+        match self.run(&[OsStr::new("config"), OsStr::new("user.email")]) {
+            Ok(_) => Ok(Vec::new()),
+            Err(GitError::NonZeroExit { code: Some(1), .. }) => Ok(vec![
+                "-c".into(),
+                format!("user.name={}", COORD_IDENTITY.0),
+                "-c".into(),
+                format!("user.email={}", COORD_IDENTITY.1),
+            ]),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl MergeOps for CliGitOps {
+    fn diff_names(&self, base: &str, branch: &str) -> Result<Vec<String>, GitError> {
+        let range = format!("{base}...{branch}");
+        let output = self.run(&[
+            OsStr::new("diff"),
+            OsStr::new("--name-only"),
+            OsStr::new("-z"),
+            OsStr::new(&range),
+            OsStr::new("--"),
+        ])?;
+        Ok(output
+            .stdout
+            .split(|&b| b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect())
+    }
+
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, GitError> {
+        match self.run(&[
+            OsStr::new("merge-base"),
+            OsStr::new("--is-ancestor"),
+            OsStr::new(ancestor),
+            OsStr::new(descendant),
+        ]) {
+            Ok(_) => Ok(true),
+            Err(GitError::NonZeroExit { code: Some(1), .. }) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn worktree_add_detached(&self, path: &Path, rev: &str) -> Result<(), GitError> {
+        self.run_ok(&[
+            OsStr::new("worktree"),
+            OsStr::new("add"),
+            OsStr::new("--detach"),
+            path.as_os_str(),
+            OsStr::new(rev),
+        ])
+    }
+
+    fn reset_clean(&self, rev: &str) -> Result<(), GitError> {
+        self.run_ok(&[
+            OsStr::new("reset"),
+            OsStr::new("--hard"),
+            OsStr::new("-q"),
+            OsStr::new(rev),
+        ])?;
+        self.run_ok(&[OsStr::new("clean"), OsStr::new("-fdq")])
+    }
+
+    fn merge_no_ff(&self, branch: &str, message: &str) -> Result<MergeOutcome, GitError> {
+        let identity = self.identity_args()?;
+        let mut args: Vec<&OsStr> = identity.iter().map(OsStr::new).collect();
+        args.extend([
+            OsStr::new("merge"),
+            OsStr::new("--no-ff"),
+            OsStr::new("--no-edit"),
+            OsStr::new("-m"),
+            OsStr::new(message),
+            OsStr::new(branch),
+        ]);
+        match self.run(&args) {
+            Ok(_) => Ok(MergeOutcome::Merged(self.rev_parse("HEAD")?)),
+            Err(err) => {
+                let unmerged = self.run(&[
+                    OsStr::new("diff"),
+                    OsStr::new("--name-only"),
+                    OsStr::new("-z"),
+                    OsStr::new("--diff-filter=U"),
+                ])?;
+                let paths: Vec<String> = unmerged
+                    .stdout
+                    .split(|&b| b == 0)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| String::from_utf8_lossy(p).into_owned())
+                    .collect();
+                if paths.is_empty() {
+                    return Err(err);
+                }
+                self.run_ok(&[OsStr::new("merge"), OsStr::new("--abort")])?;
+                Ok(MergeOutcome::Conflict(paths))
+            }
+        }
+    }
+
+    fn merge_ff_only(&self, rev: &str) -> Result<(), GitError> {
+        self.run_ok(&[
+            OsStr::new("merge"),
+            OsStr::new("--ff-only"),
+            OsStr::new("-q"),
+            OsStr::new(rev),
+        ])
+    }
+
+    fn head_branch(&self) -> Result<Option<String>, GitError> {
+        match self.run(&[
+            OsStr::new("symbolic-ref"),
+            OsStr::new("-q"),
+            OsStr::new("HEAD"),
+        ]) {
+            Ok(output) => Ok(Some(stdout_line(&output))),
+            Err(GitError::NonZeroExit { code: Some(1), .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 /// `true` if a failed `push --force-with-lease` lost a race rather than
 /// failing for network/auth reasons. Two shapes exist:
 /// - client side: the advertised remote value no longer matches the lease
