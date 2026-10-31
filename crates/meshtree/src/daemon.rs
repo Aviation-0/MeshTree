@@ -30,6 +30,7 @@ use meshtree_platform::ipc::{
     ERROR_CODE_DAEMON_UNREACHABLE,
 };
 use meshtree_platform::lock::{boot_id, pid_alive, same_boot, DaemonLock, LockError};
+use meshtree_platform::teardown::gc_quarantine;
 use meshtree_platform::wal::{replay, Wal, WalOp};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -587,8 +588,13 @@ impl Daemon {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// One supervisor pass: heartbeat live claims, abandon silent tasks.
+    /// One supervisor pass: heartbeat live claims, abandon silent tasks,
+    /// retry quarantined trees (§10 step 4, idle GC).
     fn supervise(&self, now_ms: u64) {
+        let gc = gc_quarantine(&crate::worktree::quarantine_dir(&self.repo_root));
+        for path in &gc.removed {
+            note!("quarantine GC removed {}", path.display());
+        }
         let mut inner = self.lock();
         let tasks = match registry::list_tasks(&self.repo_root) {
             Ok(listing) => listing.tasks,

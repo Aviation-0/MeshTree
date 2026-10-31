@@ -569,6 +569,8 @@ pub trait MergeOps {
     fn merge_ff_only(&self, rev: &str) -> Result<(), GitError>;
     /// The branch `HEAD` is attached to (`refs/heads/…`), or `None` if detached.
     fn head_branch(&self) -> Result<Option<String>, GitError>;
+    /// `git worktree prune`: forget worktrees whose directory is gone.
+    fn worktree_prune(&self) -> Result<(), GitError>;
 }
 
 impl CliGitOps {
@@ -694,6 +696,10 @@ impl MergeOps for CliGitOps {
             Err(GitError::NonZeroExit { code: Some(1), .. }) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    fn worktree_prune(&self) -> Result<(), GitError> {
+        self.run_ok(&[OsStr::new("worktree"), OsStr::new("prune")])
     }
 }
 

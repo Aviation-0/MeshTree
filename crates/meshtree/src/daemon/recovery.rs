@@ -175,10 +175,10 @@ impl Daemon {
                 self.release_claims(&mut task)?;
                 let worktree = self.repo_root.join(&task.worktree);
                 if worktree.exists() {
-                    if let Err(err) =
-                        crate::worktree::remove(&self.repo_root, &self.config.share, &worktree)
-                    {
-                        note!("{}: task worktree left in place: {err}", task.id);
+                    let outcome =
+                        crate::worktree::remove(&self.repo_root, &self.config.share, &worktree);
+                    if let Some(text) = crate::worktree::note(&outcome) {
+                        note!("{}: {text}", task.id);
                     }
                 }
                 self.transition(&mut task, TaskStatus::Merged)?;

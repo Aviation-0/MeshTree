@@ -5,6 +5,7 @@ mod daemon;
 mod exit;
 mod init;
 mod merge_gate;
+mod prune;
 mod queue;
 mod registry;
 mod repo;
@@ -83,6 +84,12 @@ enum Command {
     },
     /// Fast-forward the base branch to the integration branch
     Promote,
+    /// Remove leftover worktrees of finished tasks and retry quarantined trees
+    Prune {
+        /// Only leftover worktrees of finished tasks (skip the quarantine GC)
+        #[arg(long)]
+        stale_only: bool,
+    },
     /// Shared-operation FIFO queue (requires a running daemon)
     Queue {
         /// Queue name ([queue.<name>] in config.toml)
@@ -191,8 +198,21 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Abort { task_id }) => {
-            let task = abort::run(&current_dir()?, &task_id)?;
+            let (task, note) = abort::run(&current_dir()?, &task_id)?;
             println!("{} {}", task.status, task.id);
+            if let Some(note) = note {
+                eprintln!("meshtree: {note}");
+            }
+            Ok(())
+        }
+        Some(Command::Prune { stale_only }) => {
+            let report = prune::run(&current_dir()?, stale_only)?;
+            for line in &report.stdout {
+                println!("{line}");
+            }
+            for line in &report.notes {
+                eprintln!("meshtree: {line}");
+            }
             Ok(())
         }
         Some(Command::Claim { task_id, globs }) => {
