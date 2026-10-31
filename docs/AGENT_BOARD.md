@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-025 (Windows locked-handle teardown test)
-- Status: doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-31 | Claude Opus 5.5 (Windows): T-025 done (26/45), session end. Exclusive-handle (dwShareMode=0) collect + abort never fail; prune reclaims after release. ADR-0006 (Proposed): Windows blocks moving a dir with an exclusively open file → defer (MT-020).
+  CI green (run 41228444158). Open: ADR-0006/0005/0003 acceptance, macOS SUN_LEN. Next: T-026.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-024 done (25/45). platform::teardown: backoff 250ms→8s, quarantine move (MT-021), else delete-what-we-can + reboot-delete (MT-020), never fails; gc_quarantine (daemon idle + prune); meshtree prune [--stale-only].
   CI green (run 41228256318). Next: T-025.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-023 done (24/45). spawn links [[share]] dirs (MT-040 never fails spawn), info/exclude for links; all worktree deletions unlink shares first.
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41227678198). Local clippy now covers linux + macOS targets. Next: T-023.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-021 done (22/45). Startup recovery before bind: WAL↔task.json reconcile, aged git-lock cleanup, integration reset, landed merges completed / interrupted collects → active; ping reports recovery_ms.
   CI green (run 41226059939). Open: macOS deep repo paths overflow daemon.sock SUN_LEN (ADR needed); ADR-0005/0003. Next: T-022.
-- 2026-10-31 | Claude Opus 5.5 (Windows): T-020 done (21/45), session end. Merge gate: collect_task RPC (validate via queue, MT-032 claim check, merge mutex, integration worktree merge, promote_validate before ref CAS) + meshtree promote (ff-only).
-  CI green (run 41224611824) after Windows CRLF test fix. Open: ADR-0005 + ADR-0003 acceptance. Next: T-021.
