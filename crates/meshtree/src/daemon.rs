@@ -20,11 +20,12 @@
 use crate::exit::{CliError, DAEMON, PLATFORM, TASK, USAGE};
 use crate::repo::{load_config, machine_id, require_repo_root};
 use crate::{claims, clock, registry};
-use meshtree_core::{Config, Task, TaskId, TaskStatus};
+use meshtree_core::queue::{check_overrides, Holder, QueueTicket, SharedQueue, TICKET_ID_PREFIX};
+use meshtree_core::{Config, Task, TaskId, TaskIdAllocator, TaskStatus, Timestamp};
 use meshtree_platform::ipc::{
     Endpoint, ErrorBody, IpcClient, IpcError, IpcListener, Request, Response,
 };
-use meshtree_platform::lock::{DaemonLock, LockError};
+use meshtree_platform::lock::{boot_id, pid_alive, same_boot, DaemonLock, LockError};
 use meshtree_platform::wal::{replay, Wal, WalOp};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -103,6 +104,11 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
             wal: opened.wal,
             journaled: state.tasks.keys().cloned().collect(),
             last_seen: BTreeMap::new(),
+        }),
+        queues: Mutex::new(Queues {
+            by_name: BTreeMap::new(),
+            ids: TaskIdAllocator::new(),
+            boot: boot_id().ok(),
         }),
         dirty: AtomicBool::new(false),
         shutdown: AtomicBool::new(false),
@@ -237,9 +243,46 @@ struct Daemon {
     started_ms: u64,
     /// Held for every state-changing operation (serializes clients).
     ops: Mutex<Inner>,
+    /// Shared-operation queues (§12); separate from `ops` so polling a
+    /// ticket never waits behind a coordination sync.
+    queues: Mutex<Queues>,
     /// A coordination push was deferred and should be retried.
     dirty: AtomicBool,
     shutdown: AtomicBool,
+}
+
+/// Local FIFO queues, created on first use from `[queue.<name>]`.
+struct Queues {
+    by_name: BTreeMap<String, SharedQueue>,
+    ids: TaskIdAllocator,
+    /// This boot, for holder liveness (`None` if it could not be read: then
+    /// only the pid is checked).
+    boot: Option<String>,
+}
+
+impl Queues {
+    /// Evicts tickets of dead holders (pid + boot id, §12) and grants the
+    /// freed slots.
+    fn maintain(&mut self, now: Timestamp) {
+        let boot = self.boot.clone();
+        let dead = |h: &Holder| {
+            boot.as_deref().is_some_and(|b| !same_boot(&h.boot_id, b)) || !pid_alive(h.pid)
+        };
+        for queue in self.by_name.values_mut() {
+            for ticket in queue.evict(dead, now) {
+                note!(
+                    "queue {}: evicted {} (holder pid {} is gone)",
+                    queue.name,
+                    ticket.id,
+                    ticket.holder.pid
+                );
+            }
+        }
+    }
+
+    fn find(&self, id: &str) -> Option<&QueueTicket> {
+        self.by_name.values().find_map(|q| q.get(id))
+    }
 }
 
 struct Inner {
@@ -354,12 +397,106 @@ impl Daemon {
                     })).collect::<Vec<_>>(),
                 }))
             }
+            "request_shared_op" => self.request_shared_op(params),
+            "ticket_status" => {
+                let id = str_param(params, "ticket_id")?;
+                let mut queues = self.queues();
+                queues.maintain(now());
+                let ticket = queues.find(&id).ok_or_else(|| unknown_ticket(&id))?;
+                json_result(serde_json::to_value(ticket))
+            }
+            "release_shared_op" => {
+                let id = str_param(params, "ticket_id")?;
+                let mut queues = self.queues();
+                let released = queues
+                    .by_name
+                    .values_mut()
+                    .find_map(|q| q.release(&id, now()))
+                    .is_some();
+                queues.maintain(now());
+                Ok(json!({ "ticket_id": id, "released": released }))
+            }
+            "queue_status" => {
+                let mut queues = self.queues();
+                queues.maintain(now());
+                let name = params.get("queue").and_then(Value::as_str);
+                let tickets: Vec<&QueueTicket> = queues
+                    .by_name
+                    .values()
+                    .filter(|q| name.map_or(true, |n| q.name == n))
+                    .flat_map(|q| q.tickets())
+                    .collect();
+                json_result(serde_json::to_value(tickets))
+            }
             "shutdown" => {
                 self.shutdown.store(true, Ordering::SeqCst);
                 Ok(json!({ "stopping": true }))
             }
             other => Err(CliError::new(USAGE, format!("unknown method '{other}'"))),
         }
+    }
+
+    /// `request_shared_op` (§12, §15): validates the queue, task and
+    /// overrides (§17, `ADR-0005`), then issues a FIFO ticket for the
+    /// calling process (`pid`, `boot_id`).
+    fn request_shared_op(&self, params: &Value) -> Result<Value, CliError> {
+        let name = str_param(params, "queue")?;
+        let config = self
+            .config
+            .queue
+            .get(&name)
+            .ok_or_else(|| CliError::new(USAGE, format!("unknown queue '{name}'")))?;
+        let id = task_id_param(params)?;
+        let task = registry::read_task(&self.repo_root, &id)?;
+        if task.status != TaskStatus::Active {
+            return Err(CliError::new(
+                TASK,
+                format!("task {id} is {}; only active tasks use queues", task.status),
+            ));
+        }
+        let args: Vec<String> = match params.get("command_override") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(_) => strings_param(params, "command_override")?,
+        };
+        check_overrides(&name, &config.allow_args, &args)
+            .map_err(|err| CliError::new(USAGE, err.to_string()))?;
+        let pid = params
+            .get("pid")
+            .and_then(Value::as_u64)
+            .and_then(|p| u32::try_from(p).ok())
+            .ok_or_else(|| CliError::new(USAGE, "missing integer parameter 'pid'"))?;
+        let holder = Holder {
+            pid,
+            boot_id: str_param(params, "boot_id")?,
+        };
+        let mut command = config.command.clone();
+        for arg in &args {
+            command.push(' ');
+            command.push_str(arg);
+        }
+
+        let mut queues = self.queues();
+        let now = now();
+        queues.maintain(now);
+        let ulid = queues.ids.allocate(now.unix_ms(), clock::entropy());
+        let ticket_id = format!("{TICKET_ID_PREFIX}{}", &ulid.as_str()[2..]);
+        let queue = queues
+            .by_name
+            .entry(name.clone())
+            .or_insert_with(|| SharedQueue::new(name.clone(), config.concurrency));
+        let ticket = queue.request(ticket_id, task.id.clone(), holder, args, now);
+        let mut result = json_result(serde_json::to_value(ticket))?;
+        result["command"] = json!(command);
+        result["worktree"] = json!(self.repo_root.join(&task.worktree));
+        drop(queues);
+        self.lock().touch(&task.id);
+        Ok(result)
+    }
+
+    fn queues(&self) -> std::sync::MutexGuard<'_, Queues> {
+        self.queues
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -454,10 +591,31 @@ fn task_id_param(params: &Value) -> Result<TaskId, CliError> {
     TaskId::parse(&raw).ok_or_else(|| CliError::new(USAGE, format!("'{raw}' is not a task id")))
 }
 
+fn now() -> Timestamp {
+    Timestamp::from_unix_ms(clock::now_unix_ms())
+}
+
+fn unknown_ticket(id: &str) -> CliError {
+    CliError::new(
+        TASK,
+        format!("unknown ticket {id} (released, or evicted after its holder exited)"),
+    )
+}
+
 fn paths_param(params: &Value) -> Result<Vec<String>, CliError> {
-    let bad = || CliError::new(USAGE, "'paths' must be a non-empty array of strings");
+    strings_param(params, "paths")
+}
+
+/// A non-empty array of strings under `key`.
+fn strings_param(params: &Value, key: &str) -> Result<Vec<String>, CliError> {
+    let bad = || {
+        CliError::new(
+            USAGE,
+            format!("'{key}' must be a non-empty array of strings"),
+        )
+    };
     let paths = params
-        .get("paths")
+        .get(key)
         .and_then(Value::as_array)
         .ok_or_else(bad)?
         .iter()

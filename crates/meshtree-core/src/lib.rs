@@ -8,6 +8,7 @@
 pub mod config;
 pub mod lease;
 pub mod pattern;
+pub mod queue;
 pub mod task;
 pub mod time;
 

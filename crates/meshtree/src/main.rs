@@ -4,6 +4,7 @@ mod clock;
 mod daemon;
 mod exit;
 mod init;
+mod queue;
 mod registry;
 mod repo;
 mod spawn;
@@ -70,8 +71,28 @@ enum Command {
         #[arg(required = true, value_name = "GLOB")]
         globs: Vec<String>,
     },
+    /// Shared-operation FIFO queue (requires a running daemon)
+    Queue {
+        /// Queue name ([queue.<name>] in config.toml)
+        queue: String,
+        #[command(subcommand)]
+        action: QueueAction,
+    },
     /// Flush local claim events and pull remote ones (refs/meshtree/coord)
     Sync,
+}
+
+#[derive(Debug, Subcommand)]
+enum QueueAction {
+    /// Wait for a slot, run the queue command in the task worktree, release it
+    Request {
+        /// Task ID
+        #[arg(long)]
+        task: String,
+        /// Extra arguments (must be in the queue's allow_args)
+        #[arg(last = true, value_name = "ARG")]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -163,6 +184,10 @@ fn run(cli: Cli) -> Result<(), CliError> {
             print_claim_report("released", &report);
             Ok(())
         }
+        Some(Command::Queue {
+            queue,
+            action: QueueAction::Request { task, args },
+        }) => queue::request(&current_dir()?, &queue, &task, &args),
         Some(Command::Sync) => {
             let (outcome, revoked, _) = claims::sync(&current_dir()?)?;
             println!("{}", claims::push_status(&outcome));

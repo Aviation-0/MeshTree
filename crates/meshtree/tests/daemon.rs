@@ -4,90 +4,14 @@
 
 mod common;
 
-use common::{assert_exit, meshtree, TempDir};
+use common::{assert_exit, meshtree, spawn_task, DaemonProc, TempDir};
 use meshtree_core::{Task, TaskId, ERROR_CODE_CLAIM_CONFLICT};
 use meshtree_platform::ipc::{Endpoint, IpcClient};
 use meshtree_platform::wal::{self, WalOp};
 use serde_json::json;
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Child, ChildStdout, Command, Output, Stdio};
-use std::time::{Duration, Instant};
-
-/// A running `meshtree daemon`, killed on drop if still alive. Its stdout
-/// stays open (`_stdout`) for the daemon's lifetime.
-struct DaemonProc {
-    child: Child,
-    _stdout: BufReader<ChildStdout>,
-}
-
-impl DaemonProc {
-    /// Starts the daemon in `repo` and waits for its "listening" line.
-    fn start(repo: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_meshtree"))
-            .arg("daemon")
-            .current_dir(repo)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn daemon");
-        let mut stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut line = String::new();
-        stdout.read_line(&mut line).unwrap();
-        if !line.contains("listening on") {
-            let _ = child.kill();
-            let out = child.wait_with_output().unwrap();
-            panic!(
-                "daemon did not start: {line:?} / {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-        Self {
-            child,
-            _stdout: stdout,
-        }
-    }
-
-    /// Sends `shutdown` and waits for a clean exit.
-    fn stop(mut self, repo: &Path) {
-        let endpoint = Endpoint::for_repo(repo).unwrap();
-        let resp = IpcClient::connect(&endpoint)
-            .expect("daemon reachable")
-            .call("shutdown", json!({}))
-            .unwrap();
-        assert!(resp.ok, "{resp:?}");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(status) = self.child.try_wait().unwrap() {
-                assert!(status.success(), "daemon exit status {status}");
-                return;
-            }
-            assert!(Instant::now() < deadline, "daemon did not stop");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-}
-
-impl Drop for DaemonProc {
-    fn drop(&mut self) {
-        if let Ok(None) = self.child.try_wait() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-    }
-}
-
-fn spawn_task(repo: &Path, name: &str) -> String {
-    let out = meshtree(repo, &["spawn", name]);
-    assert_exit(&out, 0);
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix("task_id: "))
-        .expect("spawn prints task_id")
-        .to_string()
-}
+use std::process::{Child, Command, Output, Stdio};
 
 fn read_task(repo: &Path, id: &str) -> Task {
     let path = repo.join(".meshtree/tasks").join(id).join("task.json");

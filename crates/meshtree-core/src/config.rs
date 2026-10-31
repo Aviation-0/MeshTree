@@ -354,6 +354,12 @@ pub struct QueueConfig {
 
     /// Command executed by this queue.
     pub command: String,
+
+    /// Arguments an agent may append via `command_override` (`SPEC.md` §17,
+    /// `ADR-0005`): exact arguments, or `--flag=*` for `--flag=<safe value>`.
+    /// Empty (the default) accepts no overrides.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_args: Vec<String>,
 }
 
 impl QueueConfig {
@@ -371,6 +377,13 @@ impl QueueConfig {
             return Err(ConfigError::new(format!(
                 "queue.{name}.command must not be empty"
             )));
+        }
+        for arg in &self.allow_args {
+            if arg.is_empty() || arg.chars().any(char::is_whitespace) {
+                return Err(ConfigError::new(format!(
+                    "queue.{name}.allow_args entries must be non-empty without whitespace, got '{arg}'"
+                )));
+            }
         }
         Ok(())
     }
