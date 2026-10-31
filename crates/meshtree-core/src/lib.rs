@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod lease;
+pub mod pattern;
 pub mod task;
 pub mod time;
 
@@ -18,6 +19,7 @@ pub use lease::{
     replay, EventType, Lease, LeaseEvent, LeaseTable, Rejection, Replay, ReplayConfig,
     ERROR_CODE_CLAIM_CONFLICT,
 };
+pub use pattern::{conflicts, conflicts_raw, normalize, PatternError};
 pub use task::{
     Task, TaskError, TaskId, TaskIdAllocator, TaskSpec, TaskStatus, ERROR_CODE_ILLEGAL_TRANSITION,
 };
