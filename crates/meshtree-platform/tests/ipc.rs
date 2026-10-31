@@ -131,3 +131,134 @@ fn ipc_unreachable_returns_mt010() {
     let resp = client.call("echo", json!([1, 2, 3])).unwrap();
     assert_eq!(resp.result, Some(json!({ "echo": [1, 2, 3] })));
 }
+
+/// Removes a directory on drop.
+#[cfg(unix)]
+struct Cleanup(PathBuf);
+
+#[cfg(unix)]
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A repository nested so deep that `.meshtree/daemon.sock` exceeds the
+/// socket path limit (`ADR-0007`), plus a private fallback base. The base is
+/// short and under `/tmp` like the real one: macOS's `$TMPDIR` alone is
+/// ~50 bytes, which would push the fallback socket itself past the limit.
+#[cfg(unix)]
+fn deep_repo(tmp: &TempRepo) -> (PathBuf, PathBuf, Cleanup) {
+    let repo = tmp.path().join("x".repeat(100));
+    fs::create_dir_all(repo.join(".meshtree")).unwrap();
+    let base = PathBuf::from(format!(
+        "/tmp/mtb-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&base).unwrap();
+    (repo, base.clone(), Cleanup(base))
+}
+
+#[cfg(unix)]
+fn my_uid(tmp: &TempRepo) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(tmp.path()).unwrap().uid()
+}
+
+#[cfg(unix)]
+#[test]
+fn ipc_long_repo_path_uses_tmp_fallback() {
+    use meshtree_platform::ipc::MAX_SOCKET_PATH;
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempRepo::new();
+    let (repo, base, _cleanup) = deep_repo(&tmp);
+    assert!(repo.join(".meshtree/daemon.sock").as_os_str().len() > MAX_SOCKET_PATH);
+
+    let endpoint = Endpoint::for_repo_in(&repo, &base).unwrap();
+    assert!(endpoint.is_fallback());
+    let dir = base.join(format!("meshtree-{}", my_uid(&tmp)));
+    assert_eq!(endpoint.path().parent(), Some(dir.as_path()));
+    let name = endpoint
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(name.ends_with(".sock") && name.len() == 16 + 5, "{name}");
+    assert!(endpoint.path().as_os_str().len() <= MAX_SOCKET_PATH);
+    // Daemon and clients derive the same endpoint independently.
+    assert_eq!(Endpoint::for_repo_in(&repo, &base).unwrap(), endpoint);
+    // The production base is /tmp.
+    let default = Endpoint::for_repo(&repo).unwrap();
+    assert!(
+        default.path().starts_with("/tmp"),
+        "{}",
+        default.path().display()
+    );
+    assert!(default.path().to_string_lossy().contains("/meshtree-"));
+    // A short repository path keeps the in-repo socket.
+    assert!(!Endpoint::for_repo_in(tmp.path(), &base)
+        .unwrap()
+        .is_fallback());
+
+    // Bind creates the private directory; the daemon serves through it.
+    echo_server(&endpoint);
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&dir), 0o700);
+    assert_eq!(mode(endpoint.path()), 0o600);
+    let mut client = IpcClient::connect(&endpoint).expect("connect via fallback");
+    let resp = client.call("echo", json!({ "deep": true })).unwrap();
+    assert_eq!(resp.result, Some(json!({ "echo": { "deep": true } })));
+}
+
+#[cfg(unix)]
+#[test]
+fn ipc_fallback_dir_wrong_owner_or_mode_refused() {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let tmp = TempRepo::new();
+    let (repo, base, _cleanup) = deep_repo(&tmp);
+    let endpoint = Endpoint::for_repo_in(&repo, &base).unwrap();
+    let dir = endpoint.path().parent().unwrap().to_path_buf();
+    let refused = |what: &str| {
+        let err = IpcListener::bind(&endpoint).err().expect(what);
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{what}: {err}");
+        match IpcClient::connect(&endpoint) {
+            Err(IpcError::Io(err)) => {
+                assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{what}")
+            }
+            Err(other) => panic!("{what}: expected a refusal, got {other}"),
+            Ok(_) => panic!("{what}: connected"),
+        }
+    };
+
+    // Group/world-accessible directory (someone could swap the socket).
+    fs::DirBuilder::new().mode(0o755).create(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    refused("mode 0755");
+
+    // A symlink, even to a private directory we own, is not accepted: it
+    // may have been planted to redirect the socket.
+    fs::remove_dir(&dir).unwrap();
+    let elsewhere = tmp.path().join("elsewhere");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&elsewhere)
+        .unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+    refused("symlink");
+    // (A directory owned by another uid fails the same check; creating one
+    // needs root, so it is not exercised here.)
+
+    // No directory: no daemon (MT-010); binding creates it correctly.
+    fs::remove_file(&dir).unwrap();
+    let err = IpcClient::connect(&endpoint)
+        .err()
+        .expect("nothing listening");
+    assert_eq!(err.code(), Some(ERROR_CODE_DAEMON_UNREACHABLE), "{err}");
+    echo_server(&endpoint);
+    let mut client = IpcClient::connect(&endpoint).unwrap();
+    assert!(client.call("echo", json!(1)).unwrap().ok);
+}

@@ -7,8 +7,8 @@
 //!
 //! | | macOS / Linux | Windows |
 //! |---|---|---|
-//! | Endpoint | `<repo>/.meshtree/daemon.sock` | `\\.\pipe\meshtree-<repo-hash-16>` |
-//! | Access | socket `0600`; parent owned by us, not group/world-writable | DACL: owner + SYSTEM only; remote clients rejected |
+//! | Endpoint | `<repo>/.meshtree/daemon.sock`, or `/tmp/meshtree-<uid>/<repo-hash-16>.sock` when that is too long (`ADR-0007`) | `\\.\pipe\meshtree-<repo-hash-16>` |
+//! | Access | socket `0600`; parent owned by us, not group/world-writable; fallback directory a real `0700` directory owned by us | DACL: owner + SYSTEM only; remote clients rejected |
 //!
 //! One request per line, one response per line, in order, per connection.
 //! A connection that sends a line that is not a valid request is closed.
@@ -130,10 +130,20 @@ impl From<io::Error> for IpcError {
     }
 }
 
+/// Longest Unix socket path `bind`/`connect` accept: `sun_path` minus the
+/// terminating NUL (104 bytes on macOS, 108 on Linux).
+pub const MAX_SOCKET_PATH: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
+
+/// Base of the Unix fallback socket directory (`ADR-0007`).
+pub const FALLBACK_BASE: &str = "/tmp";
+
 /// Where a repository's daemon listens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     path: PathBuf,
+    /// Unix only: the per-user directory holding a fallback socket
+    /// (`ADR-0007`), checked before every bind and connect.
+    fallback_dir: Option<PathBuf>,
 }
 
 impl Endpoint {
@@ -141,19 +151,45 @@ impl Endpoint {
     ///
     /// Windows: `\\.\pipe\meshtree-<first 16 hex of sha1(canonical root)>`,
     /// lower-cased first since NTFS paths are case-insensitive.
+    ///
+    /// Unix: `<repo>/.meshtree/daemon.sock`, unless that exceeds
+    /// [`MAX_SOCKET_PATH`]; then `/tmp/meshtree-<uid>/<first 16 hex of
+    /// sha1(canonical root)>.sock` (`ADR-0007`).
     pub fn for_repo(repo_root: &Path) -> io::Result<Self> {
+        Self::for_repo_in(repo_root, Path::new(FALLBACK_BASE))
+    }
+
+    /// [`Endpoint::for_repo`] with the Unix fallback directory created under
+    /// `base` instead of `/tmp` (tests).
+    pub fn for_repo_in(repo_root: &Path, base: &Path) -> io::Result<Self> {
         if cfg!(windows) {
             let canonical = std::fs::canonicalize(repo_root)?;
             let key = canonical.to_string_lossy().to_lowercase();
             let hash = meshtree_core::lease::coord::sha1_hex(key.as_bytes());
-            Ok(Self {
+            return Ok(Self {
                 path: PathBuf::from(format!(r"\\.\pipe\meshtree-{}", &hash[..16])),
-            })
-        } else {
-            Ok(Self {
-                path: repo_root.join(".meshtree").join("daemon.sock"),
-            })
+                fallback_dir: None,
+            });
         }
+        let path = repo_root.join(".meshtree").join("daemon.sock");
+        if path.as_os_str().len() <= MAX_SOCKET_PATH {
+            return Ok(Self {
+                path,
+                fallback_dir: None,
+            });
+        }
+        let canonical = std::fs::canonicalize(repo_root)?;
+        let hash = meshtree_core::lease::coord::sha1_hex(canonical.to_string_lossy().as_bytes());
+        let dir = base.join(format!("meshtree-{}", sys::uid()));
+        Ok(Self {
+            path: dir.join(format!("{}.sock", &hash[..16])),
+            fallback_dir: Some(dir),
+        })
+    }
+
+    /// `true` when the Unix fallback socket is used (`ADR-0007`).
+    pub fn is_fallback(&self) -> bool {
+        self.fallback_dir.is_some()
     }
 
     /// Socket path or pipe name.
@@ -200,6 +236,13 @@ pub struct IpcClient {
 impl IpcClient {
     /// Connects; `MT-010` if nothing is listening at `endpoint`.
     pub fn connect(endpoint: &Endpoint) -> Result<Self, IpcError> {
+        if let Some(dir) = &endpoint.fallback_dir {
+            // A missing directory means no daemon (MT-010 below); one that
+            // exists must be ours (§17, ADR-0007).
+            if std::fs::symlink_metadata(dir).is_ok() {
+                sys::check_fallback_dir(dir).map_err(IpcError::Io)?;
+            }
+        }
         let conn = sys::connect(endpoint.path()).map_err(|source| {
             if is_unreachable(&source) {
                 IpcError::Unreachable {
@@ -256,6 +299,9 @@ impl IpcListener {
     /// `AddrInUse` if a live daemon already listens there; a stale Unix
     /// socket file left by a dead daemon is replaced.
     pub fn bind(endpoint: &Endpoint) -> io::Result<Self> {
+        if let Some(dir) = &endpoint.fallback_dir {
+            sys::ensure_fallback_dir(dir)?;
+        }
         Ok(Self {
             inner: sys::Listener::bind(endpoint.path())?,
         })
@@ -304,6 +350,46 @@ mod sys {
     pub struct Listener {
         listener: UnixListener,
         _path: PathBuf,
+    }
+
+    extern "C" {
+        fn getuid() -> u32;
+    }
+
+    /// The real user id.
+    pub fn uid() -> u32 {
+        // SAFETY: getuid has no preconditions and cannot fail.
+        unsafe { getuid() }
+    }
+
+    /// Creates the fallback directory `0700` if absent, then checks it.
+    pub fn ensure_fallback_dir(dir: &Path) -> io::Result<()> {
+        use std::os::unix::fs::DirBuilderExt;
+        match fs::DirBuilder::new().mode(0o700).create(dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+        check_fallback_dir(dir)
+    }
+
+    /// §17 for the fallback directory (`ADR-0007`): a real directory (not a
+    /// symlink), owned by this user, mode exactly `0700`.
+    pub fn check_fallback_dir(dir: &Path) -> io::Result<()> {
+        let meta = fs::symlink_metadata(dir)?;
+        let ok = meta.file_type().is_dir() && meta.uid() == uid() && meta.mode() & 0o777 == 0o700;
+        if ok {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} must be a real directory owned by uid {} with mode 0700 (ADR-0007)",
+                    dir.display(),
+                    uid()
+                ),
+            ))
+        }
     }
 
     fn duplex(stream: UnixStream) -> io::Result<Duplex> {
@@ -378,6 +464,20 @@ mod sys {
     use std::os::windows::io::FromRawHandle;
     use std::path::Path;
     use std::time::{Duration, Instant};
+
+    // Windows uses named pipes; the Unix socket fallback (ADR-0007) never
+    // applies, so these exist only to keep the shared code uniform.
+    pub fn uid() -> u32 {
+        0
+    }
+
+    pub fn ensure_fallback_dir(_dir: &Path) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub fn check_fallback_dir(_dir: &Path) -> io::Result<()> {
+        Ok(())
+    }
 
     type Handle = *mut c_void;
 
