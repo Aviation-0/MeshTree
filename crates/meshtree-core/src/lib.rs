@@ -6,6 +6,7 @@
 //! and property-tested (`SPEC.md` §18, Appendix B).
 
 pub mod config;
+pub mod handoff;
 pub mod lease;
 pub mod pattern;
 pub mod queue;
