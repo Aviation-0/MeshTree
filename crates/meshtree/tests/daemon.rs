@@ -138,14 +138,8 @@ fn two_client_processes_race_claims_one_wins() {
     assert_eq!(journaled, expected);
     let state = wal::replay(&log);
     assert!(state.anomalies.is_empty(), "{:?}", state.anomalies);
-    let mut winning_tasks: Vec<&String> = winners.iter().map(|(t, _)| t).collect();
-    winning_tasks.sort();
-    winning_tasks.dedup();
-    assert_eq!(
-        state.tasks.len(),
-        winning_tasks.len(),
-        "adopted on first claim"
-    );
+    // Both live tasks are adopted into the WAL at daemon startup (T-021).
+    assert_eq!(state.tasks.len(), 2);
 
     // With the daemon stopped the CLI works in-process (no MT-010), and the
     // WAL is untouched.
