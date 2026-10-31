@@ -9,7 +9,7 @@ Anti-Bloat Constraints:
 
 ## Active Lock
 - Model: Claude Opus 5.5 (Windows)
-- Task: T-018 (meshtree daemon supervisor + two-client claim race)
+- Task: T-019 (shared-op FIFO queue + meshtree queue CLI)
 - Status: doing
 
 ## Team Roster & Roles
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-31 | Claude Opus 5.5 (Windows): T-018 done (19/45). meshtree daemon: lock+WAL+IPC, mutex-serialized claim/release RPCs (WAL-journaled), heartbeats, ttl x4 abandon sweep, deferred-push flush; CLI routes claims via daemon if up.
+  CI green (run 41223643960) after closed-stdout panic fix. Next: T-019 (ADR-0005 allow_args, Proposed).
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-044 done (18/45). git children run LC_ALL=C; update_ref CasRejected only if ref moved; retry-exhaustion (5 pushes → MT-003) + local CAS retry tests.
   CI green (run 41222922141). Windows host: clippy now runs locally via GNU toolchain (check-only). Next: T-018.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-017 done (17/45). platform::wal CRC-framed fsynced journal, torn-tail truncation, mid-log corruption refused, pure replay → WalState + anomalies (MT-004).
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41215529894). Open: OS machine-id derivation unowned; ADR-0003 acceptance; §17 allow-list ADR blocks T-019. Next: T-017.
 - 2026-10-30 | Claude Opus 5.5: T-015 complete (15/42). platform::ipc NDJSON over UDS (0600 + parent check) / named pipe (owner+SYSTEM DACL, no remote, first-instance); MT-010 when unreachable. CI green (run 41155843711).
   Needs human review: ADR-0003, §6-key ADR candidates (§13/§17/§11), unowned coord tasks/ registry. Next: T-016.
-- 2026-10-30 | Claude Opus 5.5: T-014 complete — M1 done. CLI claim/release/sync + spawn --claim over CoordStore (origin if configured); MT-001 exit 20 names holder; all-or-nothing batches; abort releases claims.
-  sync flushes deferred pushes + revokes claims lost to remote winners. CI green (run 41155551527). Open: coord tasks/<id>.json registry unassigned. Next: T-015.
