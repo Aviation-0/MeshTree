@@ -9,7 +9,7 @@ Anti-Bloat Constraints:
 
 ## Active Lock
 - Model: Claude Opus 5.5 (Windows)
-- Task: T-044 (locale-safe git + retry-exhaustion tests)
+- Task: T-018 (meshtree daemon supervisor + two-client claim race)
 - Status: doing
 
 ## Team Roster & Roles
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-31 | Claude Opus 5.5 (Windows): T-044 done (18/45). git children run LC_ALL=C; update_ref CasRejected only if ref moved; retry-exhaustion (5 pushes → MT-003) + local CAS retry tests.
+  CI green (run 41222922141). Windows host: clippy now runs locally via GNU toolchain (check-only). Next: T-018.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-017 done (17/45). platform::wal CRC-framed fsynced journal, torn-tail truncation, mid-log corruption refused, pure replay → WalState + anomalies (MT-004).
   CI green (run 41222685141). Next: T-044 (gates T-018).
 - 2026-10-31 | Claude Opus 5.5 (Mac): audit T-003–T-015 (no regressions, 6 debts) → approved restructure T-043–T-045, ADR-0004. T-016 done (16/45): platform::lock flock/named-mutex guard + pid/boot_id record, MT-011 adoption.
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   Needs human review: ADR-0003, §6-key ADR candidates (§13/§17/§11), unowned coord tasks/ registry. Next: T-016.
 - 2026-10-30 | Claude Opus 5.5: T-014 complete — M1 done. CLI claim/release/sync + spawn --claim over CoordStore (origin if configured); MT-001 exit 20 names holder; all-or-nothing batches; abort releases claims.
   sync flushes deferred pushes + revokes claims lost to remote winners. CI green (run 41155551527). Open: coord tasks/<id>.json registry unassigned. Next: T-015.
-- 2026-10-30 | Claude Opus 5.5: T-013 complete. platform::coord::CoordStore::sync (fetch → union → replay → canonical tree → local CAS → push --force-with-lease; ×5 jittered retry; MT-003; offline ⇒ deferred push).
-  Fixed: concurrent pushes lose at remote ref lock ("[remote rejected] failed to update ref") — now classified as lost race. CI green (run 41155358409). Next: T-014.
