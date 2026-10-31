@@ -34,6 +34,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Writes a line to stdout, ignoring failure: a daemon must outlive the
+/// terminal or pipe that started it (`println!` panics on a closed pipe).
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        let mut out = io::stdout().lock();
+        let _ = writeln!(out, $($arg)*);
+        let _ = out.flush();
+    }};
+}
+
+/// [`say!`] for stderr, prefixed `meshtree: `.
+macro_rules! note {
+    ($($arg:tt)*) => {{
+        let _ = writeln!(io::stderr().lock(), "meshtree: {}", format_args!($($arg)*));
+    }};
+}
+
 /// How often a deferred coordination push is retried.
 const FLUSH_EVERY_SECS: u64 = 5;
 
@@ -53,20 +70,17 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         LockError::Io { .. } => CliError::new(PLATFORM, err.to_string()),
     })?;
     if let Some(stale) = &acquired.recovered {
-        eprintln!("meshtree: {stale}");
+        note!("{stale}");
     }
 
     let opened =
         Wal::open(&repo_root).map_err(|err| CliError::new(PLATFORM, format!("open WAL: {err}")))?;
     if let Some(torn) = opened.torn {
-        eprintln!("meshtree: WAL recovery: {torn}");
+        note!("WAL recovery: {torn}");
     }
     let state = replay(&opened.entries);
     for anomaly in &state.anomalies {
-        eprintln!(
-            "meshtree: WAL entry {} skipped: {}",
-            anomaly.seq, anomaly.message
-        );
+        note!("WAL entry {} skipped: {}", anomaly.seq, anomaly.message);
     }
 
     let endpoint = Endpoint::for_repo(&repo_root)
@@ -96,12 +110,11 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
     let handler = Arc::clone(&daemon);
     listener.serve(move |req| handler.handle(req));
 
-    println!(
+    say!(
         "meshtree daemon {} listening on {}",
         std::process::id(),
         endpoint.path().display()
     );
-    let _ = io::stdout().flush();
 
     let mut last_beat = started_ms;
     let mut last_flush = started_ms;
@@ -117,7 +130,7 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
             daemon.flush();
         }
     }
-    println!("meshtree daemon {} stopped", std::process::id());
+    say!("meshtree daemon {} stopped", std::process::id());
     drop(acquired);
     Ok(())
 }
@@ -362,7 +375,7 @@ impl Daemon {
         let tasks = match registry::list_tasks(&self.repo_root) {
             Ok(listing) => listing.tasks,
             Err(err) => {
-                eprintln!("meshtree: supervisor: {}", err.message);
+                note!("supervisor: {}", err.message);
                 return;
             }
         };
@@ -379,12 +392,12 @@ impl Daemon {
                     self.dirty.store(true, Ordering::SeqCst)
                 }
                 Ok(_) => {}
-                Err(err) => eprintln!("meshtree: heartbeat {}: {}", task.id, err.message),
+                Err(err) => note!("heartbeat {}: {}", task.id, err.message),
             }
         }
         for task in tasks.iter().filter(|t| plan.abandon.contains(&t.id)) {
             if let Err(err) = self.abandon(&mut inner, task.clone()) {
-                eprintln!("meshtree: sweep {}: {}", task.id, err.message);
+                note!("sweep {}: {}", task.id, err.message);
             }
         }
     }
@@ -408,10 +421,7 @@ impl Daemon {
             from,
             to: TaskStatus::Abandoned,
         })?;
-        eprintln!(
-            "meshtree: {} abandoned (no activity for ttl_secs x 4)",
-            task.id
-        );
+        note!("{} abandoned (no activity for ttl_secs x 4)", task.id);
         Ok(())
     }
 
@@ -422,7 +432,7 @@ impl Daemon {
             Ok((outcome, _)) => self
                 .dirty
                 .store(outcome.deferred.is_some(), Ordering::SeqCst),
-            Err(err) => eprintln!("meshtree: flush: {}", err.message),
+            Err(err) => note!("flush: {}", err.message),
         }
     }
 }

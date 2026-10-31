@@ -12,11 +12,15 @@ use serde_json::json;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-/// A running `meshtree daemon`, killed on drop if still alive.
-struct DaemonProc(Child);
+/// A running `meshtree daemon`, killed on drop if still alive. Its stdout
+/// stays open (`_stdout`) for the daemon's lifetime.
+struct DaemonProc {
+    child: Child,
+    _stdout: BufReader<ChildStdout>,
+}
 
 impl DaemonProc {
     /// Starts the daemon in `repo` and waits for its "listening" line.
@@ -29,10 +33,9 @@ impl DaemonProc {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn daemon");
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
+        stdout.read_line(&mut line).unwrap();
         if !line.contains("listening on") {
             let _ = child.kill();
             let out = child.wait_with_output().unwrap();
@@ -41,7 +44,10 @@ impl DaemonProc {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
-        Self(child)
+        Self {
+            child,
+            _stdout: stdout,
+        }
     }
 
     /// Sends `shutdown` and waits for a clean exit.
@@ -54,7 +60,7 @@ impl DaemonProc {
         assert!(resp.ok, "{resp:?}");
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            if let Some(status) = self.0.try_wait().unwrap() {
+            if let Some(status) = self.child.try_wait().unwrap() {
                 assert!(status.success(), "daemon exit status {status}");
                 return;
             }
@@ -66,9 +72,9 @@ impl DaemonProc {
 
 impl Drop for DaemonProc {
     fn drop(&mut self) {
-        if let Ok(None) = self.0.try_wait() {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+        if let Ok(None) = self.child.try_wait() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }
