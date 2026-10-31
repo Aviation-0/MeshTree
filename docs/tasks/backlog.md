@@ -29,7 +29,7 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 | `T-003` | M0 | `done` | Task model + ID allocation | — | `crates/meshtree-core` (module `task`) | `SPEC` §7, §8 | `Task` record, `"t-" + ULID` ID allocation, and §8 state transitions; named unit tests `task_id_ulid_format_and_monotonic`, `task_json_serde_roundtrip`, and `task_status_state_machine_transitions` pass. |
 | `T-004` | M0 | `done` | `meshtree init` CLI | `T-002` | `crates/meshtree` | `SPEC` §5, §6, §14, §16 | Writes `.meshtree/config.toml` template idempotently and initializes `.meshtree/`; named integration tests `init_writes_valid_template` and `init_twice_is_idempotent` pass. |
 | `T-005` | M0 | `done` | `meshtree spawn` | `T-001`, `T-003`, `T-004` | `crates/meshtree` + `platform::gitops` | `SPEC` §5, §7, §8, §14 | Creates worktree + `meshtree/<task-id>` branch + `.meshtree/tasks/<id>/task.json`; named integration test `spawn_creates_worktree_branch_and_task_json` passes on a temp repo. |
-| `T-006` | M0 | `doing` | `meshtree status` / `meshtree abort` | `T-005` | `crates/meshtree` | `SPEC` §8, §14, §16 | Lists tasks from registry (`--json` supported) and `abort` removes worktree + updates record to `abandoned`; named integration tests `status_lists_registry_entries` and `abort_removes_worktree_and_marks_abandoned` pass. |
+| `T-006` | M0 | `done` | `meshtree status` / `meshtree abort` | `T-005` | `crates/meshtree` | `SPEC` §8, §14, §16 | Lists tasks from registry (`--json` supported) and `abort` removes worktree + updates record to `abandoned`; named integration tests `status_lists_registry_entries` and `abort_removes_worktree_and_marks_abandoned` pass. |
 | `T-007` | M0 | `todo` | Lease event model + ordering key | — | `crates/meshtree-core` (module `lease`) | `SPEC` §7, §9, §18 | Event types `ACQUIRE`/`RELEASE`/`HEARTBEAT`/`EXPIRE_SWEEP` and ordering key `(ts, counter, machine, id)` defined; named unit tests `lease_event_serde_and_ordering_key` and `replay_handcrafted_event_log` pass. |
 | `T-008` | M0 | `todo` | Deterministic replay → lease table | `T-007` | `crates/meshtree-core` | `SPEC` §9, §16 (`MT-001`), §18 | Named property test `replay_determinism_200_random_streams` (`proptest` over ≥ 200 randomized event streams and permutations) asserts byte-identical derived `LeaseTable` and `REJECTED` (`MT-001`) audit outputs. |
 | `T-009` | M0 | `todo` | Path-pattern normalization + conflict rule | — | `crates/meshtree-core` | `SPEC` §7, §17, §18 | Conservative glob/prefix overlap rule and `.meshtree/` claim exclusion; named unit test `pattern_conflict_exhaustive_case_table` asserts **zero false negatives** across the exhaustive case table. |
@@ -70,6 +70,13 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 ---
 
 ## Handoff log
+
+- **2026-10-30 (Claude Opus 5.5 · `T-006` done + template fix + backlog audit):**
+  - **Current task:** `T-006` — **done**. CI run 41153075068 on `34e41a1`: all 3 OS jobs `success` (fmt, clippy `-D warnings`, `cargo test --workspace`).
+  - **What's done:** `meshtree status [task-id] [--json]` (`src/status.rs`) and `meshtree abort <task-id>` (`src/abort.rs`); registry I/O in `src/registry.rs` (shared with `spawn`). Missing `tasks/` = empty; dirs without `task.json` skipped (merged handoffs, §13); malformed records warned + skipped; unknown id → exit 20, invalid id → exit 10. Abort: only `active` (§8 edge), else `MT-004` exit 20 with no side effects; worktree removed, branch kept. Named tests `status_lists_registry_entries`, `abort_removes_worktree_and_marks_abandoned` + 3 edge-case tests.
+  - **Template fix:** `Config::template()` no longer bakes `id = "mc-lucas-mac"`; spawn derives `mc-<hostname>` (env, then `hostname` command). New test `spawn_uses_configured_machine_id`.
+  - **Backlog audit:** added `T-039` (§8 integration non-ff remote retry ×5), `T-040` (§12 ticket TTL), `T-041` (§19 crates.io publish), `T-042` (§19/§20 MCP directory listing); added as `Deps` of `T-029`/`T-037` so they stay in-milestone. ADR candidates (not tasked; need a §6 config key or policy decision): §13 configurable 10-line cap, §17 per-queue override allow-list, §11 `.venv` "recreate" policy.
+  - **Deferred:** abort removal-failure → quarantine (`T-024`); claim release (`T-014`). **Next:** `T-007`. **Failing tests:** None.
 
 - **2026-10-30 (Claude Opus 5.5 · `T-005` done):**
   - **Current task:** `T-005` — **done**. CI run 41152201797 on `d676c97`: all 3 OS jobs `success` (fmt, clippy `-D warnings`, `cargo test --workspace`).

@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5
-- Task: T-006
-- Status: Doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -23,6 +23,9 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-30 | Claude Opus 5.5: T-006 complete. status (text/--json; missing tasks/ = empty, malformed warned+skipped) + abort (active→abandoned, worktree removed, branch kept; else MT-004 exit 20). 5 tests. CI green (run 41153075068).
+  Template fix: [machine] id commented out; spawn derives mc-<hostname> (env, then `hostname`). Backlog audit: added T-039 (§8 non-ff retry), T-040 (§12 ticket TTL), T-041 (§19 crates.io), T-042 (MCP listing) → 42 tasks.
+  ADR candidates: §13 configurable cap, §17 queue override allow-list, §11 .venv recreate (no §6 keys). Next: T-007.
 - 2026-10-30 | Claude Opus 5.5: T-005 complete. `meshtree spawn`: ULID → task.json (spawning) → worktree add meshtree/<id> → active|failed; atomic temp+rename writes.
   Bad base rejected pre-write (exit 10). std-only clock/entropy/RFC 3339 (src/clock.rs); repo/config helpers in src/repo.rs. 5 integration tests. CI green (run 41152201797).
   Deferred: sharing T-023, coord registry + --claim T-013/14, OS machine-id T-016. Flag: Config::template() hard-codes machine id "mc-lucas-mac". Next: T-006.
@@ -33,4 +36,3 @@ Anti-Bloat Constraints:
   Monotonic t-+ULID allocator, clock/entropy injected (pure). 3 named unit tests + 4 proptest properties (arbitrary sequences, terminal absorption, ID order/bijection).
   3-OS CI green (run 41151157057). Unblocks T-004 (init) → T-005 (spawn). T-028 must map MT-004. gh CLI unauthenticated on host; CI read via public API.
 - 2026-10-30 | Gemini 3.8 High: T-002 complete. Config load/validation with MT-050 landed. 3-OS CI green.
-- 2026-10-30 | Mistral Large 4: T-001 complete. CLI-git GitOps backend with CAS update-ref semantics merged.
