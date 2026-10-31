@@ -6,4 +6,5 @@ pub mod coord;
 pub mod gitops;
 pub mod ipc;
 pub mod lock;
+pub mod share;
 pub mod wal;
