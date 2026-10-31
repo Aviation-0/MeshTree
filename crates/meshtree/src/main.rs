@@ -1,6 +1,7 @@
 mod abort;
 mod claims;
 mod clock;
+mod daemon;
 mod exit;
 mod init;
 mod registry;
@@ -22,6 +23,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Start the background service for this repository
+    Daemon,
     /// Write the .meshtree/config.toml template and initialize .meshtree/
     Init,
     /// Create an isolated task worktree and branch, and register the task
@@ -100,6 +103,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("meshtree {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+        Some(Command::Daemon) => daemon::run(&current_dir()?),
         Some(Command::Init) => {
             let report = init::run(&current_dir()?)?;
             let dir = report.repo_root.join(repo::MESHTREE_DIR);
@@ -181,8 +185,8 @@ fn print_claim_report(verb: &str, report: &claims::Report) {
     for path in &report.paths {
         println!("{verb} {path}");
     }
-    println!("{}", claims::push_status(&report.outcome));
-    if let Some(reason) = &report.outcome.deferred {
+    println!("{}", report.coord);
+    if let Some(reason) = &report.deferred {
         eprintln!("meshtree: push deferred ({reason}); run `meshtree sync` later");
     }
 }

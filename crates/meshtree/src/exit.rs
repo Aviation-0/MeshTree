@@ -7,7 +7,6 @@ pub const USAGE: u8 = 10;
 /// Task or lease error (`MT-00x`).
 pub const TASK: u8 = 20;
 /// Daemon error (`MT-01x`).
-#[allow(dead_code)]
 pub const DAEMON: u8 = 30;
 /// Platform error (filesystem, locked file, quarantine).
 pub const PLATFORM: u8 = 40;

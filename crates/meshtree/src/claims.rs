@@ -11,7 +11,8 @@
 //! The remote is `origin` when configured; otherwise the ref is local-only.
 
 use crate::clock;
-use crate::exit::{CliError, PLATFORM, TASK, USAGE};
+use crate::daemon;
+use crate::exit::{CliError, DAEMON, PLATFORM, TASK, USAGE};
 use crate::registry;
 use crate::repo::{load_config, machine_id, require_repo_root};
 use meshtree_core::lease::{EventType, LeaseEvent, ReplayConfig, ERROR_CODE_CLAIM_CONFLICT};
@@ -167,40 +168,121 @@ fn active_task(repo_root: &Path, raw_id: &str) -> Result<Task, CliError> {
     Ok(task)
 }
 
-/// Result of a claim command, for printing.
+/// Result of a claim command, for printing (also the daemon's
+/// `claim_paths` / `release_paths` result).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     /// Normalized paths acted on.
     pub paths: Vec<String>,
-    /// Coordination sync result.
-    pub outcome: SyncOutcome,
+    /// One-line coordination status ([`push_status`]).
+    pub coord: String,
+    /// Why the push was deferred, if it was.
+    pub deferred: Option<String>,
 }
 
-/// `meshtree claim <task-id> <glob>…`.
+impl Report {
+    fn new(paths: Vec<String>, outcome: &SyncOutcome) -> Self {
+        Self {
+            paths,
+            coord: push_status(outcome),
+            deferred: outcome.deferred.clone(),
+        }
+    }
+
+    /// Wire form for the daemon IPC.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "paths": self.paths,
+            "coord": self.coord,
+            "deferred": self.deferred,
+        })
+    }
+
+    /// Parses [`Report::to_json`] output.
+    pub fn from_json(value: &serde_json::Value) -> Result<Self, CliError> {
+        let bad = || CliError::new(DAEMON, format!("malformed daemon claim result: {value}"));
+        let paths = value["paths"]
+            .as_array()
+            .ok_or_else(bad)?
+            .iter()
+            .map(|p| p.as_str().map(str::to_string).ok_or_else(bad))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            paths,
+            coord: value["coord"].as_str().ok_or_else(bad)?.to_string(),
+            deferred: value["deferred"].as_str().map(str::to_string),
+        })
+    }
+}
+
+/// `meshtree claim <task-id> <glob>…`: through the daemon when one is
+/// running, else in-process.
 pub fn claim(cwd: &Path, raw_id: &str, globs: &[String]) -> Result<Report, CliError> {
     let repo_root = require_repo_root(cwd)?;
+    let params = serde_json::json!({ "task_id": raw_id, "paths": globs });
+    if let Some(result) = daemon::call(&repo_root, "claim_paths", params) {
+        return Report::from_json(&result?);
+    }
     let config = load_config(&repo_root)?;
+    Ok(claim_in(&repo_root, &config, raw_id, globs)?.1)
+}
+
+/// Claims `globs` for an active task and records them in `task.json`.
+pub fn claim_in(
+    repo_root: &Path,
+    config: &Config,
+    raw_id: &str,
+    globs: &[String],
+) -> Result<(Task, Report), CliError> {
     let paths = normalize_all(globs)?;
-    let mut task = active_task(&repo_root, raw_id)?;
-    let outcome = acquire(&repo_root, &config, &task.id, &paths)?;
+    let mut task = active_task(repo_root, raw_id)?;
+    let outcome = acquire(repo_root, config, &task.id, &paths)?;
     for path in &paths {
         if !task.claims.contains(path) {
             task.claims.push(path.clone());
         }
     }
-    registry::write_task(&repo_root, &task)?;
-    Ok(Report { paths, outcome })
+    registry::write_task(repo_root, &task)?;
+    Ok((task, Report::new(paths, &outcome)))
 }
 
-/// `meshtree release <task-id> <glob>…`.
+/// `meshtree release <task-id> <glob>…`: through the daemon when one is
+/// running, else in-process.
 pub fn release_cmd(cwd: &Path, raw_id: &str, globs: &[String]) -> Result<Report, CliError> {
     let repo_root = require_repo_root(cwd)?;
+    let params = serde_json::json!({ "task_id": raw_id, "paths": globs });
+    if let Some(result) = daemon::call(&repo_root, "release_paths", params) {
+        return Report::from_json(&result?);
+    }
     let config = load_config(&repo_root)?;
+    Ok(release_in(&repo_root, &config, raw_id, globs)?.1)
+}
+
+/// Releases `globs` held by an active task and records it in `task.json`.
+pub fn release_in(
+    repo_root: &Path,
+    config: &Config,
+    raw_id: &str,
+    globs: &[String],
+) -> Result<(Task, Report), CliError> {
     let paths = normalize_all(globs)?;
-    let mut task = active_task(&repo_root, raw_id)?;
-    let outcome = release(&repo_root, &config, &task.id, &paths)?;
+    let mut task = active_task(repo_root, raw_id)?;
+    let outcome = release(repo_root, config, &task.id, &paths)?;
     task.claims.retain(|c| !paths.contains(c));
-    registry::write_task(&repo_root, &task)?;
-    Ok(Report { paths, outcome })
+    registry::write_task(repo_root, &task)?;
+    Ok((task, Report::new(paths, &outcome)))
+}
+
+/// Re-asserts `paths` held by `task` (`HEARTBEAT` events, §9).
+pub fn heartbeat(
+    repo_root: &Path,
+    config: &Config,
+    task: &TaskId,
+    paths: &[String],
+) -> Result<SyncOutcome, CliError> {
+    let machine = machine_id(config);
+    let batch = events(EventType::Heartbeat, task, paths, &machine, 0);
+    store(repo_root, config)?.sync(&batch).map_err(coord_error)
 }
 
 /// A local claim revoked by a remote winner (§9: the claiming daemon is
@@ -219,7 +301,17 @@ pub struct Revocation {
 pub fn sync(cwd: &Path) -> Result<(SyncOutcome, Vec<Revocation>, PathBuf), CliError> {
     let repo_root = require_repo_root(cwd)?;
     let config = load_config(&repo_root)?;
-    let outcome = store(&repo_root, &config)?.sync(&[]).map_err(coord_error)?;
+    let (outcome, revoked) = sync_in(&repo_root, &config)?;
+    Ok((outcome, revoked, repo_root))
+}
+
+/// [`sync`] for an already-resolved repository (also run by the daemon).
+pub fn sync_in(
+    repo_root: &Path,
+    config: &Config,
+) -> Result<(SyncOutcome, Vec<Revocation>), CliError> {
+    let repo_root = repo_root.to_path_buf();
+    let outcome = store(&repo_root, config)?.sync(&[]).map_err(coord_error)?;
     let mut revoked = Vec::new();
     for mut task in registry::list_tasks(&repo_root)?.tasks {
         let lost: Vec<&meshtree_core::Rejection> = outcome
@@ -244,7 +336,7 @@ pub fn sync(cwd: &Path) -> Result<(SyncOutcome, Vec<Revocation>, PathBuf), CliEr
         task.claims.retain(|c| !lost.iter().any(|r| &r.path == c));
         registry::write_task(&repo_root, &task)?;
     }
-    Ok((outcome, revoked, repo_root))
+    Ok((outcome, revoked))
 }
 
 /// One-line push status for stdout.
