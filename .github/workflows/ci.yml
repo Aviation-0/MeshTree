@@ -26,6 +26,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Lint with clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build
+        run: cargo build --workspace
       - name: Run tests
         run: cargo test --workspace

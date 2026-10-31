@@ -39,9 +39,11 @@ fn any_kind() -> impl Strategy<Value = EventType> {
     ])
 }
 
+/// Event fields without the id: (kind, path, task, machine, ms, counter, ttl).
+type EventBody = (EventType, usize, usize, usize, u64, u64, Option<u64>);
+
 /// Event fields without the id; ids are assigned by position so they are unique.
-fn any_event_body() -> impl Strategy<Value = (EventType, usize, usize, usize, u64, u64, Option<u64>)>
-{
+fn any_event_body() -> impl Strategy<Value = EventBody> {
     (
         any_kind(),
         0..PATHS.len(),
@@ -54,7 +56,7 @@ fn any_event_body() -> impl Strategy<Value = (EventType, usize, usize, usize, u6
     )
 }
 
-fn build(bodies: Vec<(EventType, usize, usize, usize, u64, u64, Option<u64>)>) -> Vec<LeaseEvent> {
+fn build(bodies: Vec<EventBody>) -> Vec<LeaseEvent> {
     let tasks = task_ids();
     bodies
         .into_iter()

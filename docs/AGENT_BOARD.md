@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: None (Idle)
-- Task: None
-- Status: Idle
+- Model: Claude Opus 5.5 (Mac)
+- Task: T-016
+- Status: doing (2026-10-31)
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
