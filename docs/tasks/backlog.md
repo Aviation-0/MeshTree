@@ -24,7 +24,7 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 |---|---|---|---|---|---|---|---|
 | `T-001` | M0 | `done` | `GitOps` trait + CLI-git backend | — | `crates/meshtree-platform` (module `gitops`) | `SPEC` §4, §8, §9, App. A, App. B (`ADR-0001`) | Named temp-repo integration tests `gitops_worktree_add_list_remove`, `gitops_ref_read_and_rev_parse`, and `gitops_update_ref_cas_accepts_and_rejects` pass on Linux, macOS, and Windows. |
 | `T-002` | M0 | `done` | Config load & validation | — | `crates/meshtree-core` (module `config`) | `SPEC` §6, §11, §12, §16 (`MT-050`) | Serde parse of `.meshtree/config.toml` spec fields and typed `MT-050` errors; named unit tests `config_parses_spec_example` and `config_rejects_invalid_fields_with_mt050` pass. |
-| `T-003` | M0 | `doing` | Task model + ID allocation | — | `crates/meshtree-core` (module `task`) | `SPEC` §7, §8 | `Task` record, `"t-" + ULID` ID allocation, and §8 state transitions; named unit tests `task_id_ulid_format_and_monotonic`, `task_json_serde_roundtrip`, and `task_status_state_machine_transitions` pass. |
+| `T-003` | M0 | `done` | Task model + ID allocation | — | `crates/meshtree-core` (module `task`) | `SPEC` §7, §8 | `Task` record, `"t-" + ULID` ID allocation, and §8 state transitions; named unit tests `task_id_ulid_format_and_monotonic`, `task_json_serde_roundtrip`, and `task_status_state_machine_transitions` pass. |
 | `T-004` | M0 | `todo` | `meshtree init` CLI | `T-002` | `crates/meshtree` | `SPEC` §5, §6, §14, §16 | Writes `.meshtree/config.toml` template idempotently and initializes `.meshtree/`; named integration tests `init_writes_valid_template` and `init_twice_is_idempotent` pass. |
 | `T-005` | M0 | `todo` | `meshtree spawn` | `T-001`, `T-003`, `T-004` | `crates/meshtree` + `platform::gitops` | `SPEC` §5, §7, §8, §14 | Creates worktree + `meshtree/<task-id>` branch + `.meshtree/tasks/<id>/task.json`; named integration test `spawn_creates_worktree_branch_and_task_json` passes on a temp repo. |
 | `T-006` | M0 | `todo` | `meshtree status` / `meshtree abort` | `T-005` | `crates/meshtree` | `SPEC` §8, §14, §16 | Lists tasks from registry (`--json` supported) and `abort` removes worktree + updates record to `abandoned`; named integration tests `status_lists_registry_entries` and `abort_removes_worktree_and_marks_abandoned` pass. |
@@ -64,6 +64,13 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 ---
 
 ## Handoff log
+
+- **2026-10-30 (Claude Opus 5.5 · `T-003` done):**
+  - **Current task:** `T-003` — **done**. CI run 41151157057 on `03405a9`: all 3 OS jobs (ubuntu/windows/macos) `success` (fmt, clippy `-D warnings`, `cargo test --workspace`).
+  - **What's done:** `meshtree-core::task` — `Task` (§7), `TaskId` (`"t-" + ULID`, Crockford base32, validated at serde boundary), `TaskIdAllocator` (monotonic under clock stall/rewind; clock + entropy injected, core stays pure), `TaskStatus` with exactly the 7 §7 statuses / 9 §8 edges; illegal transitions → `MT-004` with state unchanged. `ADR-0002` adds `MT-004` to SPEC §16 (brief's `MT-010`/`MT-011` and `Init/Aborted` states rejected as SPEC-contradicting, per user decision). Named unit tests `task_id_ulid_format_and_monotonic`, `task_json_serde_roundtrip`, `task_status_state_machine_transitions`; proptest suite `tests/task_lifecycle_props.rs` (4 properties, 512 cases). New dev-dep `serde_json`.
+  - **Verification:** local `cargo fmt --all --check` only — clippy/check/build/test cannot run locally (no MSVC `link.exe`; build scripts fail). `gh` is unauthenticated here; CI status read via the public GitHub API.
+  - **What's next:** `T-004` (`meshtree init` CLI), then `T-007`, `T-009`. `T-028` must map `MT-004`.
+  - **Failing tests:** None.
 
 - **2026-10-30 (Google Antigravity · `T-002` done):**
   - **Current task:** `T-002` — **done**. CI run 41149054292 on `87e5c6c`: all 3 OS jobs (windows-latest, ubuntu-latest, macos-latest) `success`, including format check, clippy `-D warnings`, and `cargo test --workspace` with the named unit tests `config_parses_spec_example` and `config_rejects_invalid_fields_with_mt050`.
