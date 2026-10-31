@@ -5,13 +5,14 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate` (Week 3 · Target: `2026-11-22`)
-- **In-Progress Task (`doing`):** `T-026` — handoff record model, `HANDOFF.md` & `AGENTS.md` snapshots (Claude Opus 5.5, Windows)
+- **In-Progress Task (`doing`):** None
 - **Next Up (`todo`, dependencies satisfied):**
-  1. `T-026` — Handoff record model, `HANDOFF.md` & `AGENTS.md` byte-stable snapshots (`crates/meshtree-core`)
+  1. `T-027` — `meshtree handoff` & `meshtree render-agents` CLI + task-branch commit (`crates/meshtree`)
   2. `T-039` — Integration-branch remote sync (non-ff retry ×5) (`crates/meshtree`)
   3. `T-040` — Queue ticket TTL expiry (`crates/meshtree-core` + daemon)
   4. `T-043` — Coord-ref task registry (`crates/meshtree` + `platform::coord`)
-- **Latest (2026-10-31, Claude Opus 5.5, Windows):** `T-046` done (27/46) — Unix daemon socket falls back to `/tmp/meshtree-<uid>/<repo-hash-16>.sock` (owner/mode/symlink-checked `0700` directory) when `.meshtree/daemon.sock` exceeds the socket path limit (`ADR-0007`); CI run 41230869170 green on all 3 OSes.
+- **Latest (2026-10-31, Claude Opus 5.5, Windows):** `T-026` done (28/46) — pure handoff model + `HANDOFF.md` / `AGENTS.md` block renderers and splice (byte-stable snapshots, marker-forgery defused); CI run 41231429375 green on all 3 OSes.
+- **Earlier (2026-10-31, Claude Opus 5.5, Windows):** `T-046` done (27/46) — Unix daemon socket falls back to `/tmp/meshtree-<uid>/<repo-hash-16>.sock` (owner/mode/symlink-checked `0700` directory) when `.meshtree/daemon.sock` exceeds the socket path limit (`ADR-0007`); CI run 41230869170 green on all 3 OSes.
 - **ADR review (2026-10-31, Lucas Pan):** `ADR-0003`, `ADR-0005`, `ADR-0006` **Accepted**; `SPEC.md` §10 step 3 amended. `ADR-0007` (Unix socket path-length fallback) **Accepted** later the same day; `SPEC.md` §5/§10 amended and `T-046` added (dep of `T-029`).
 - **Latest (2026-10-31, Claude Opus 5.5, Windows):** `T-022`–`T-025` done (26/45). `T-022` share links: junction / clonefile / symlink, `MT-040` fallback (CI 41227678198); `T-023` `[[share]]` in `spawn`, links excluded from git, all deletions unlink shares first (CI 41227946875); `T-024` teardown backoff → quarantine (`MT-021`) → deferral (`MT-020`), quarantine GC, `meshtree prune` (CI 41228256318); `T-025` Windows exclusive-handle test — merge and abort never fail (`ADR-0006`: Windows cannot move a directory holding an exclusively opened file, so that case defers instead of quarantining) (CI 41228444158). Local clippy on this Windows host now covers the Linux and macOS targets.
 - **Earlier (2026-10-31, Claude Opus 5.5, Windows):** `T-021` done (22/45) — startup WAL recovery (reconcile WAL ↔ `task.json`, clear orphaned git locks, reset integration worktree, complete landed merges / reactivate interrupted collects) + named chaos test `chaos_sigkill_daemon_mid_merge_recovers_under_2s`; CI run 41226059939 green on all 3 OSes. M2's daemon/merge-gate/chaos exit tests are all green; M2 still has `T-039`, `T-040`, `T-043`.
@@ -29,11 +30,11 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M0 — Walking Skeleton & Core Lease Foundations** | Week 1 (`→ 2026-11-08`) | `T-001`–`T-010` | 10 | 10 | 0 | 0 | 0 | `done` |
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 4 | 0 | 0 | 0 | `done` |
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 9 | 0 | 0 | 3 | `doing` |
-| **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 4 | 1 | 0 | 4 | `doing` |
+| **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 5 | 0 | 0 | 4 | `doing` |
 | **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033` | 4 | 0 | 0 | 0 | 4 | `todo` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042` | 5 | 0 | 0 | 0 | 5 | `todo` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **27** | **1** | **0** | **18** | **59% (`27 / 46`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **28** | **0** | **0** | **18** | **61% (`28 / 46`)** |
 
 ---
 
