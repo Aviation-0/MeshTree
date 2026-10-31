@@ -10,6 +10,7 @@ mod registry;
 mod repo;
 mod spawn;
 mod status;
+mod worktree;
 
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
@@ -167,6 +168,15 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("task_id: {}", report.task.id);
             println!("branch: {}", report.task.branch);
             println!("worktree: {}", report.worktree_path.display());
+            for outcome in &report.shares {
+                match outcome.applied {
+                    meshtree_platform::share::Applied::Linked(_) => println!("share: {outcome}"),
+                    meshtree_platform::share::Applied::Fallback { .. } => {
+                        eprintln!("meshtree: {outcome}")
+                    }
+                    meshtree_platform::share::Applied::Skipped(_) => {}
+                }
+            }
             for path in &report.task.claims {
                 println!("claim: {path}");
             }

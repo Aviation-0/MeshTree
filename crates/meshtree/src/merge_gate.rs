@@ -217,7 +217,7 @@ fn gate<H: Host>(host: &H, task: &mut Task, message: Option<&str>) -> Result<Val
     .map_err(git_error)?;
     host.release_claims(task)?;
     let cleanup = if worktree.exists() {
-        git.worktree_remove(&worktree)
+        crate::worktree::remove(&repo_root, &config.share, &worktree)
             .err()
             .map(|err| format!("task worktree left in place: {err}"))
     } else {

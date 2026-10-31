@@ -9,7 +9,6 @@ use crate::exit::{CliError, PLATFORM, TASK, USAGE};
 use crate::repo::{load_config, require_repo_root};
 use crate::{claims, registry};
 use meshtree_core::{Task, TaskError, TaskId, TaskStatus};
-use meshtree_platform::gitops::{CliGitOps, GitOps};
 use std::path::Path;
 
 /// Runs `meshtree abort`; returns the updated task.
@@ -40,14 +39,13 @@ pub fn run(cwd: &Path, task_id: &str) -> Result<Task, CliError> {
 
     let worktree = repo_root.join(&task.worktree);
     if worktree.exists() {
-        CliGitOps::new(&repo_root)
-            .worktree_remove(&worktree)
-            .map_err(|err| {
-                CliError::new(
-                    PLATFORM,
-                    format!("{id}: worktree removal failed, task left active: {err}"),
-                )
-            })?;
+        let config = load_config(&repo_root)?;
+        crate::worktree::remove(&repo_root, &config.share, &worktree).map_err(|err| {
+            CliError::new(
+                PLATFORM,
+                format!("{id}: worktree removal failed, task left active: {err}"),
+            )
+        })?;
     }
 
     task.transition(TaskStatus::Abandoned)

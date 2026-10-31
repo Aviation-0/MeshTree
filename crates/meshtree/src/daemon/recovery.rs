@@ -175,7 +175,9 @@ impl Daemon {
                 self.release_claims(&mut task)?;
                 let worktree = self.repo_root.join(&task.worktree);
                 if worktree.exists() {
-                    if let Err(err) = git.worktree_remove(&worktree) {
+                    if let Err(err) =
+                        crate::worktree::remove(&self.repo_root, &self.config.share, &worktree)
+                    {
                         note!("{}: task worktree left in place: {err}", task.id);
                     }
                 }
