@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-31 | Claude Opus 5.5 (Windows): ADR-0007 Accepted by Lucas Pan; SPEC §5/§10 amended; T-046 (Unix socket path fallback, M2) added as dep of T-029.
+  Totals 26/46. Next: T-026.
 - 2026-10-31 | Claude Opus 5.5 (Windows): ADR review — ADR-0003/0005/0006 Accepted by Lucas Pan; SPEC §10 step 3 amended (ADR-0006).
   ADR-0007 Proposed: /tmp/meshtree-<uid>/<hash16>.sock fallback for long Unix socket paths (needs acceptance + task T-046). Next: T-026.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-025 done (26/45), session end. Exclusive-handle (dwShareMode=0) collect + abort never fail; prune reclaims after release. ADR-0006 (Proposed): Windows blocks moving a dir with an exclusively open file → defer (MT-020).
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41228256318). Next: T-025.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-023 done (24/45). spawn links [[share]] dirs (MT-040 never fails spawn), info/exclude for links; all worktree deletions unlink shares first.
   CI green (run 41227946875). Next: T-024.
-- 2026-10-31 | Claude Opus 5.5 (Windows): T-022 done (23/45). platform::share: junction (FSCTL_SET_REPARSE_POINT) / clonefile / symlink, auto per OS, MT-040 fallback to none, non-following unlink.
-  CI green (run 41227678198). Local clippy now covers linux + macOS targets. Next: T-023.

@@ -1,6 +1,6 @@
 # ADR-0007: Short Fallback Path When `.meshtree/daemon.sock` Exceeds the Unix Socket Limit
 
-- **Status:** Proposed (not implemented; pending human acceptance)
+- **Status:** Accepted (accepted by Lucas Pan, 2026-10-31; implementation tracked as `T-046`; `SPEC.md` §5 and §10 amended)
 - **Date:** 2026-10-31
 - **Author:** Claude Opus 5.5 (Agent)
 - **Authority:** `SPEC.md` §5 (layout: `.meshtree/daemon.sock`), §10 (IPC table), §16 (`MT-010`), §17 (socket `0600` + parent directory check; no TCP listener); `AGENTS.md` Standing Order #1
@@ -35,6 +35,6 @@ Both the daemon and every client compute the endpoint with the same function (`E
 ## Consequences
 
 - Daemons work for repositories at any depth on macOS and Linux, keeping §17's per-user access control.
-- `SPEC.md` §5/§10 would note: "`daemon.sock` (or `/tmp/meshtree-<uid>/<repo-hash-16>.sock` when the in-repo path exceeds the Unix socket length limit; ADR-0007)".
-- Implementation is a small change to `meshtree-platform::ipc` (endpoint derivation plus the fallback directory check) with tests: a long-path repository binds and serves through the fallback; a fallback directory with the wrong owner, mode or a symlink is refused. It needs a backlog task (proposed as `T-046`, M2/M3, before the `T-029` MVP exit).
+- `SPEC.md` §5 and §10 now note the fallback path (amended with this ADR's acceptance).
+- Implementation is a small change to `meshtree-platform::ipc` (endpoint derivation plus the fallback directory check) with tests: a long-path repository binds and serves through the fallback; a fallback directory with the wrong owner, mode or a symlink is refused. Tracked as `T-046` (M2), a dependency of the `T-029` MVP exit.
 - The CLI test temp directories were shortened in `T-021` as a stop-gap; they can stay short regardless.

@@ -11,7 +11,8 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
   2. `T-039` — Integration-branch remote sync (non-ff retry ×5) (`crates/meshtree`)
   3. `T-040` — Queue ticket TTL expiry (`crates/meshtree-core` + daemon)
   4. `T-043` — Coord-ref task registry (`crates/meshtree` + `platform::coord`)
-- **ADR review (2026-10-31, Lucas Pan):** `ADR-0003`, `ADR-0005`, `ADR-0006` **Accepted**; `SPEC.md` §10 step 3 amended. `ADR-0007` (Unix socket path-length fallback) **Proposed**, awaiting acceptance and a task (`T-046`).
+  5. `T-046` — Unix socket path-length fallback (`crates/meshtree-platform`, `ADR-0007`)
+- **ADR review (2026-10-31, Lucas Pan):** `ADR-0003`, `ADR-0005`, `ADR-0006` **Accepted**; `SPEC.md` §10 step 3 amended. `ADR-0007` (Unix socket path-length fallback) **Accepted** later the same day; `SPEC.md` §5/§10 amended and `T-046` added (dep of `T-029`).
 - **Latest (2026-10-31, Claude Opus 5.5, Windows):** `T-022`–`T-025` done (26/45). `T-022` share links: junction / clonefile / symlink, `MT-040` fallback (CI 41227678198); `T-023` `[[share]]` in `spawn`, links excluded from git, all deletions unlink shares first (CI 41227946875); `T-024` teardown backoff → quarantine (`MT-021`) → deferral (`MT-020`), quarantine GC, `meshtree prune` (CI 41228256318); `T-025` Windows exclusive-handle test — merge and abort never fail (`ADR-0006`: Windows cannot move a directory holding an exclusively opened file, so that case defers instead of quarantining) (CI 41228444158). Local clippy on this Windows host now covers the Linux and macOS targets.
 - **Earlier (2026-10-31, Claude Opus 5.5, Windows):** `T-021` done (22/45) — startup WAL recovery (reconcile WAL ↔ `task.json`, clear orphaned git locks, reset integration worktree, complete landed merges / reactivate interrupted collects) + named chaos test `chaos_sigkill_daemon_mid_merge_recovers_under_2s`; CI run 41226059939 green on all 3 OSes. M2's daemon/merge-gate/chaos exit tests are all green; M2 still has `T-039`, `T-040`, `T-043`.
 - **Last Session Summary (2026-10-31, Claude Opus 5.5, Windows):** `T-017`–`T-020` + `T-044` done (21/45). `T-017` WAL (CI 41222685141); `T-044` `LC_ALL=C` git + retry-exhaustion tests (CI 41222922141); `T-018` `meshtree daemon` with serialized IPC claims, heartbeats, `ttl × 4` sweeper (CI 41223643960, after a closed-stdout panic fix); `T-019` shared-op FIFO queue + `meshtree queue` (`ADR-0005` **Proposed**, CI 41223916867); `T-020` merge gate `collect`/`promote` (CI 41224611824). Order note: `T-044` was taken before the lower-numbered eligible `T-022` because the user directed work through `T-020` and `T-044` gates `T-018`. Windows host can now run `cargo clippy` locally via the GNU toolchain (tests still CI-only).
@@ -27,12 +28,12 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 |---|---|---|---|---|---|---|---|---|
 | **M0 — Walking Skeleton & Core Lease Foundations** | Week 1 (`→ 2026-11-08`) | `T-001`–`T-010` | 10 | 10 | 0 | 0 | 0 | `done` |
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 4 | 0 | 0 | 0 | `done` |
-| **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044` | 11 | 8 | 0 | 0 | 3 | `doing` |
+| **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 8 | 0 | 0 | 4 | `doing` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 4 | 0 | 0 | 5 | `doing` |
 | **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033` | 4 | 0 | 0 | 0 | 4 | `todo` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042` | 5 | 0 | 0 | 0 | 5 | `todo` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-045`** | **45** | **26** | **0** | **0** | **19** | **58% (`26 / 45`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **26** | **0** | **0** | **20** | **57% (`26 / 46`)** |
 
 ---
 

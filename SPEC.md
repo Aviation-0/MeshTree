@@ -93,7 +93,7 @@ flowchart TD
 └── .meshtree/                     # gitignored except where noted
     ├── config.toml                # committed by the user (project policy)
     ├── daemon.lock                # singleton lock: pid, boot_id, machine_id
-    ├── daemon.sock                # macOS/Linux UDS  (Windows: named pipe)
+    ├── daemon.sock                # macOS/Linux UDS  (Windows: named pipe; long paths: ADR-0007)
     ├── worktrees/
     │   └── t-01J…/                # task worktrees live here
     ├── tasks/
@@ -336,7 +336,7 @@ MeshTree's teardown pipeline:
 
 | | macOS / Linux | Windows |
 |---|---|---|
-| Transport | Unix domain socket `.meshtree/daemon.sock` | Named pipe `\\.\pipe\meshtree-<repo-hash-16>` |
+| Transport | Unix domain socket `.meshtree/daemon.sock`, or `/tmp/meshtree-<uid>/<repo-hash-16>.sock` (`0700` owner-checked directory) when the in-repo path exceeds the socket path limit (ADR-0007) | Named pipe `\\.\pipe\meshtree-<repo-hash-16>` |
 | Framing | Newline-delimited JSON (NDJSON) | Same |
 | Singleton | `daemon.lock` with pid + boot-id + machine-id; stale lock detection | Same + `CreateMutex` belt-and-braces |
 
