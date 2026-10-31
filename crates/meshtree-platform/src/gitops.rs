@@ -171,6 +171,8 @@ pub trait GitOps {
         new_oid: &str,
         expected_old: Option<&str>,
     ) -> Result<(), GitError>;
+    /// `git config --get remote.<name>.url`, or `None` if no such remote.
+    fn remote_url(&self, name: &str) -> Result<Option<String>, GitError>;
     /// `git hash-object -w --stdin` → blob OID.
     fn hash_object(&self, contents: &[u8]) -> Result<String, GitError>;
     /// `git mktree -z` over single-level `entries` → tree OID.
@@ -374,6 +376,16 @@ impl GitOps for CliGitOps {
                 }),
                 None => Err(e),
             },
+        }
+    }
+
+    fn remote_url(&self, name: &str) -> Result<Option<String>, GitError> {
+        let key = format!("remote.{name}.url");
+        match self.run(&[OsStr::new("config"), OsStr::new("--get"), OsStr::new(&key)]) {
+            Ok(output) => Ok(Some(stdout_line(&output))),
+            // `git config --get` exits 1 when the key is unset.
+            Err(GitError::NonZeroExit { code: Some(1), .. }) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 

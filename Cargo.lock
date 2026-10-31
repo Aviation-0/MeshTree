@@ -252,6 +252,10 @@ dependencies = [
 [[package]]
 name = "meshtree-platform"
 version = "0.1.0"
+dependencies = [
+ "meshtree-core",
+ "serde_json",
+]
 
 [[package]]
 name = "num-traits"
