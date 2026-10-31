@@ -169,6 +169,12 @@ impl DaemonProc {
         self.child.id()
     }
 
+    /// Kills the daemon without warning (`SIGKILL` / `TerminateProcess`).
+    pub fn kill(mut self) {
+        self.child.kill().expect("kill daemon");
+        self.child.wait().expect("reap daemon");
+    }
+
     /// Sends `shutdown` and waits for a clean exit.
     pub fn stop(mut self, repo: &Path) {
         let endpoint = Endpoint::for_repo(repo).unwrap();

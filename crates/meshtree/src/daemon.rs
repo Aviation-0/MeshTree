@@ -13,6 +13,9 @@
 //! for `ttl_secs × 4` to `abandoned` (their worktrees stay in place for the
 //! `T-024` quarantine GC), and retries deferred coordination-ref pushes.
 //!
+//! On startup, before binding, [`recovery`] replays the WAL against the task
+//! registry and settles collects a crash interrupted (§10 Crash safety).
+//!
 //! `claim` and `release` reach the daemon through [`call`] when it is
 //! running; when no daemon is reachable the CLI performs the same operation
 //! in-process, arbitrated by the coordination-ref CAS (`T-014`).
@@ -30,7 +33,7 @@ use meshtree_platform::lock::{boot_id, pid_alive, same_boot, DaemonLock, LockErr
 use meshtree_platform::wal::{replay, Wal, WalOp};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -40,7 +43,8 @@ use std::time::Duration;
 /// terminal or pipe that started it (`println!` panics on a closed pipe).
 macro_rules! say {
     ($($arg:tt)*) => {{
-        let mut out = io::stdout().lock();
+        use std::io::Write as _;
+        let mut out = std::io::stdout().lock();
         let _ = writeln!(out, $($arg)*);
         let _ = out.flush();
     }};
@@ -49,9 +53,12 @@ macro_rules! say {
 /// [`say!`] for stderr, prefixed `meshtree: `.
 macro_rules! note {
     ($($arg:tt)*) => {{
-        let _ = writeln!(io::stderr().lock(), "meshtree: {}", format_args!($($arg)*));
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr().lock(), "meshtree: {}", format_args!($($arg)*));
     }};
 }
+
+mod recovery;
 
 /// How often a deferred coordination push is retried.
 const FLUSH_EVERY_SECS: u64 = 5;
@@ -90,14 +97,6 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
 
     let endpoint = Endpoint::for_repo(&repo_root)
         .map_err(|err| CliError::new(PLATFORM, format!("IPC endpoint: {err}")))?;
-    let listener = IpcListener::bind(&endpoint).map_err(|err| {
-        let code = if err.kind() == io::ErrorKind::AddrInUse {
-            DAEMON
-        } else {
-            PLATFORM
-        };
-        CliError::new(code, format!("bind {}: {err}", endpoint.path().display()))
-    })?;
 
     let started_ms = clock::now_unix_ms();
     let daemon = Arc::new(Daemon {
@@ -118,6 +117,25 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         dirty: AtomicBool::new(false),
         shutdown: AtomicBool::new(false),
     });
+
+    // Recover before accepting clients (§10 Crash safety).
+    match daemon.recover(&state) {
+        Ok(report) => {
+            if let Some(summary) = report.summary() {
+                note!("{summary}");
+            }
+        }
+        Err(err) => note!("recovery incomplete: {}", err.message),
+    }
+
+    let listener = IpcListener::bind(&endpoint).map_err(|err| {
+        let code = if err.kind() == io::ErrorKind::AddrInUse {
+            DAEMON
+        } else {
+            PLATFORM
+        };
+        CliError::new(code, format!("bind {}: {err}", endpoint.path().display()))
+    })?;
     let handler = Arc::clone(&daemon);
     listener.serve(move |req| handler.handle(req));
 
