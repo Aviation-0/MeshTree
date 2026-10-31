@@ -239,6 +239,9 @@ impl CliGitOps {
             .arg("-C")
             .arg(&self.repo)
             .args(args)
+            // Untranslated messages: stderr is classified by content
+            // (`lost_push_race`), which a localized git would defeat.
+            .env("LC_ALL", "C")
             .envs(envs.iter().copied())
             .stdin(if stdin.is_some() {
                 Stdio::piped()
@@ -369,11 +372,24 @@ impl GitOps for CliGitOps {
         match self.run(&args) {
             Ok(_) => Ok(()),
             Err(e) => match expected_old {
-                // Any failure of a CAS update means the expected old OID was stale.
-                Some(old) => Err(GitError::CasRejected {
-                    reference: reference.to_string(),
-                    expected_old: old.to_string(),
-                }),
+                // A CAS failure is a lost race only if the ref no longer holds
+                // the expected value; anything else (bad object, lock file,
+                // permissions) is reported as the underlying error.
+                Some(old) => {
+                    let current = self.ref_read(reference)?;
+                    let unchanged = match current.as_deref() {
+                        None => old.bytes().all(|b| b == b'0'),
+                        Some(oid) => oid == old,
+                    };
+                    if unchanged {
+                        Err(e)
+                    } else {
+                        Err(GitError::CasRejected {
+                            reference: reference.to_string(),
+                            expected_old: old.to_string(),
+                        })
+                    }
+                }
                 None => Err(e),
             },
         }

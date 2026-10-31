@@ -284,3 +284,185 @@ fn coord_sync_local_only_and_deferred_push() {
     let local = CliGitOps::new(clone.path()).ref_read(COORD_REF).unwrap();
     assert_eq!(local.as_deref(), Some(out.oid.as_str()));
 }
+
+/// `CliGitOps` that runs `before_push` / `before_update_ref` (with the call
+/// number, from 1) ahead of the real operation, to inject a rival writer.
+struct Interfering<P, U> {
+    inner: CliGitOps,
+    before_push: P,
+    before_update_ref: U,
+    pushes: AtomicU64,
+    updates: AtomicU64,
+}
+
+impl<P: Fn(u64), U: Fn(u64)> Interfering<P, U> {
+    fn new(repo: &TempRepo, before_push: P, before_update_ref: U) -> Self {
+        Self {
+            inner: CliGitOps::new(repo.path()),
+            before_push,
+            before_update_ref,
+            pushes: AtomicU64::new(0),
+            updates: AtomicU64::new(0),
+        }
+    }
+}
+
+impl<P: Fn(u64), U: Fn(u64)> GitOps for Interfering<P, U> {
+    fn worktree_add(&self, path: &Path, branch: &str, base: &str) -> Result<(), GitError> {
+        self.inner.worktree_add(path, branch, base)
+    }
+    fn worktree_remove(&self, path: &Path) -> Result<(), GitError> {
+        self.inner.worktree_remove(path)
+    }
+    fn worktree_list(&self) -> Result<Vec<WorktreeInfo>, GitError> {
+        self.inner.worktree_list()
+    }
+    fn rev_parse(&self, rev: &str) -> Result<String, GitError> {
+        self.inner.rev_parse(rev)
+    }
+    fn ref_read(&self, reference: &str) -> Result<Option<String>, GitError> {
+        self.inner.ref_read(reference)
+    }
+    fn update_ref(&self, r: &str, new: &str, old: Option<&str>) -> Result<(), GitError> {
+        (self.before_update_ref)(self.updates.fetch_add(1, Ordering::SeqCst) + 1);
+        self.inner.update_ref(r, new, old)
+    }
+    fn remote_url(&self, name: &str) -> Result<Option<String>, GitError> {
+        self.inner.remote_url(name)
+    }
+    fn hash_object(&self, contents: &[u8]) -> Result<String, GitError> {
+        self.inner.hash_object(contents)
+    }
+    fn mktree(&self, entries: &[TreeEntry]) -> Result<String, GitError> {
+        self.inner.mktree(entries)
+    }
+    fn commit_tree(&self, tree: &str, parents: &[&str], msg: &str) -> Result<String, GitError> {
+        self.inner.commit_tree(tree, parents, msg)
+    }
+    fn ls_tree(&self, treeish: &str) -> Result<Vec<TreeEntry>, GitError> {
+        self.inner.ls_tree(treeish)
+    }
+    fn cat_blob(&self, oid: &str) -> Result<Vec<u8>, GitError> {
+        self.inner.cat_blob(oid)
+    }
+    fn fetch_ref(&self, remote: &str, src: &str, dst: &str) -> Result<Option<String>, GitError> {
+        self.inner.fetch_ref(remote, src, dst)
+    }
+    fn push_ref_cas(
+        &self,
+        remote: &str,
+        reference: &str,
+        new_oid: &str,
+        expected_old: Option<&str>,
+    ) -> Result<(), GitError> {
+        (self.before_push)(self.pushes.fetch_add(1, Ordering::SeqCst) + 1);
+        self.inner
+            .push_ref_cas(remote, reference, new_oid, expected_old)
+    }
+}
+
+/// An ACQUIRE on a distinct path, so rival events never conflict.
+fn rival_event(n: u64, task: &TaskId) -> LeaseEvent {
+    LeaseEvent {
+        id: format!("01JAY00000000000000000R{n:03}"),
+        path: format!("rival/{n}/**"),
+        ..acquire("unused", task, "mc-rival", 2_000 + n)
+    }
+}
+
+#[test]
+fn coord_sync_exhausts_retry_bound_returns_mt003() {
+    let remote = TempRepo::new(true);
+    let (ours, rival) = (TempRepo::new(false), TempRepo::new(false));
+    for clone in [&ours, &rival] {
+        clone.git(&["remote", "add", "origin", &remote.file_url()]);
+    }
+    let mut alloc = TaskIdAllocator::new();
+    let (task, rival_task) = (alloc.allocate(1, 1), alloc.allocate(1, 2));
+    let rival_store = CoordStore::new(
+        CliGitOps::new(rival.path()),
+        Some("origin".to_string()),
+        CONFIG,
+    );
+
+    // Before each of our pushes the rival lands a new commit on the remote,
+    // so every round's `--force-with-lease` is stale.
+    let store = CoordStore::new(
+        Interfering::new(
+            &ours,
+            |n| {
+                let out = rival_store
+                    .sync(&[rival_event(n, &rival_task)])
+                    .expect("rival sync");
+                assert!(out.pushed, "{out:?}");
+            },
+            |_| {},
+        ),
+        Some("origin".to_string()),
+        CONFIG,
+    );
+    let ev = acquire("01JAY0000000000000000000X1", &task, "mc-ours", 1_000);
+    let err = store
+        .sync(std::slice::from_ref(&ev))
+        .expect_err("every round loses the CAS");
+    assert!(
+        matches!(err, meshtree_platform::coord::CoordError::Contention { attempts } if attempts == MAX_ATTEMPTS),
+        "{err:?}"
+    );
+    assert_eq!(err.code(), Some("MT-003"));
+    assert!(err.to_string().contains("MT-003"), "{err}");
+    assert_eq!(
+        store.git().pushes.load(Ordering::SeqCst),
+        u64::from(MAX_ATTEMPTS),
+        "exactly the bound: no extra push after the last loss"
+    );
+
+    // The local ref still advanced (our event is safe locally); once the
+    // rival stops, the next sync pushes everything.
+    let calm = CoordStore::new(
+        CliGitOps::new(ours.path()),
+        Some("origin".to_string()),
+        CONFIG,
+    );
+    let out = calm.sync(&[]).expect("uncontended sync");
+    assert!(out.pushed && out.attempts == 1, "{out:?}");
+    assert_eq!(out.replay.leases["src/auth/**"].task, task);
+    for n in 1..=u64::from(MAX_ATTEMPTS) {
+        assert_eq!(out.replay.leases[&format!("rival/{n}/**")].task, rival_task);
+    }
+}
+
+#[test]
+fn coord_sync_retries_local_cas_race() {
+    let clone = TempRepo::new(false);
+    let mut alloc = TaskIdAllocator::new();
+    let (task, rival_task) = (alloc.allocate(1, 1), alloc.allocate(1, 2));
+    let rival = CoordStore::new(CliGitOps::new(clone.path()), None, CONFIG);
+
+    // Another local writer (same repo) moves the ref between our read and
+    // our `update-ref`, exactly once.
+    let store = CoordStore::new(
+        Interfering::new(
+            &clone,
+            |_| {},
+            |n| {
+                if n == 1 {
+                    rival
+                        .sync(&[rival_event(1, &rival_task)])
+                        .expect("rival sync");
+                }
+            },
+        ),
+        None,
+        CONFIG,
+    );
+    let ev = acquire("01JAY0000000000000000000X2", &task, "mc-ours", 1_000);
+    let out = store
+        .sync(std::slice::from_ref(&ev))
+        .expect("retry after local CAS loss");
+    assert_eq!(out.attempts, 2, "{out:?}");
+    assert_eq!(out.replay.leases["src/auth/**"].task, task);
+    assert_eq!(out.replay.leases["rival/1/**"].task, rival_task);
+    let local = CliGitOps::new(clone.path()).ref_read(COORD_REF).unwrap();
+    assert_eq!(local.as_deref(), Some(out.oid.as_str()));
+}

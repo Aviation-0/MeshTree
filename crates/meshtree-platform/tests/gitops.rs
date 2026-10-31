@@ -175,6 +175,18 @@ fn gitops_update_ref_cas_accepts_and_rejects() {
         ops.ref_read("refs/meshtree/coord").unwrap().as_deref(),
         Some(head2.as_str())
     );
+
+    // A CAS whose expected old OID is current but which fails for another
+    // reason (nonexistent object) is not a lost race (T-044).
+    let missing = "1234567890123456789012345678901234567890";
+    let err = ops
+        .update_ref("refs/meshtree/coord", missing, Some(&head2))
+        .expect_err("update to a nonexistent object must fail");
+    assert!(
+        matches!(err, GitError::NonZeroExit { .. }),
+        "expected the underlying git failure, got: {err:?}"
+    );
+    assert_eq!(err.code(), None);
 }
 
 const COORD: &str = "refs/meshtree/coord";
