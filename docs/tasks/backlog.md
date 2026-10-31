@@ -25,7 +25,7 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 | `T-001` | M0 | `done` | `GitOps` trait + CLI-git backend | — | `crates/meshtree-platform` (module `gitops`) | `SPEC` §4, §8, §9, App. A, App. B (`ADR-0001`) | Named temp-repo integration tests `gitops_worktree_add_list_remove`, `gitops_ref_read_and_rev_parse`, and `gitops_update_ref_cas_accepts_and_rejects` pass on Linux, macOS, and Windows. |
 | `T-002` | M0 | `done` | Config load & validation | — | `crates/meshtree-core` (module `config`) | `SPEC` §6, §11, §12, §16 (`MT-050`) | Serde parse of `.meshtree/config.toml` spec fields and typed `MT-050` errors; named unit tests `config_parses_spec_example` and `config_rejects_invalid_fields_with_mt050` pass. |
 | `T-003` | M0 | `done` | Task model + ID allocation | — | `crates/meshtree-core` (module `task`) | `SPEC` §7, §8 | `Task` record, `"t-" + ULID` ID allocation, and §8 state transitions; named unit tests `task_id_ulid_format_and_monotonic`, `task_json_serde_roundtrip`, and `task_status_state_machine_transitions` pass. |
-| `T-004` | M0 | `doing` | `meshtree init` CLI | `T-002` | `crates/meshtree` | `SPEC` §5, §6, §14, §16 | Writes `.meshtree/config.toml` template idempotently and initializes `.meshtree/`; named integration tests `init_writes_valid_template` and `init_twice_is_idempotent` pass. |
+| `T-004` | M0 | `done` | `meshtree init` CLI | `T-002` | `crates/meshtree` | `SPEC` §5, §6, §14, §16 | Writes `.meshtree/config.toml` template idempotently and initializes `.meshtree/`; named integration tests `init_writes_valid_template` and `init_twice_is_idempotent` pass. |
 | `T-005` | M0 | `todo` | `meshtree spawn` | `T-001`, `T-003`, `T-004` | `crates/meshtree` + `platform::gitops` | `SPEC` §5, §7, §8, §14 | Creates worktree + `meshtree/<task-id>` branch + `.meshtree/tasks/<id>/task.json`; named integration test `spawn_creates_worktree_branch_and_task_json` passes on a temp repo. |
 | `T-006` | M0 | `todo` | `meshtree status` / `meshtree abort` | `T-005` | `crates/meshtree` | `SPEC` §8, §14, §16 | Lists tasks from registry (`--json` supported) and `abort` removes worktree + updates record to `abandoned`; named integration tests `status_lists_registry_entries` and `abort_removes_worktree_and_marks_abandoned` pass. |
 | `T-007` | M0 | `todo` | Lease event model + ordering key | — | `crates/meshtree-core` (module `lease`) | `SPEC` §7, §9, §18 | Event types `ACQUIRE`/`RELEASE`/`HEARTBEAT`/`EXPIRE_SWEEP` and ordering key `(ts, counter, machine, id)` defined; named unit tests `lease_event_serde_and_ordering_key` and `replay_handcrafted_event_log` pass. |
@@ -64,6 +64,13 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 ---
 
 ## Handoff log
+
+- **2026-10-30 (Claude Opus 5.5 · `T-004` done):**
+  - **Current task:** `T-004` — **done**. CI run 41151620305 on `b71c8c3`: all 3 OS jobs `success` (fmt, clippy `-D warnings`, `cargo test --workspace`).
+  - **What's done:** `meshtree init` in `crates/meshtree` (`src/init.rs`, `src/exit.rs`, clap subcommand in `main.rs`). Repo root = nearest ancestor with `.git`; creates `.meshtree/{worktrees,tasks,quarantine}`, `config.toml` from `Config::template()`, and `.meshtree/.gitignore` (ignores all but `config.toml` + `tasks/*/{HANDOFF.md,handoff.json}`, per §5/§13). Never overwrites (`create_new`); existing invalid config → `MT-050`, exit 10. §14 exit codes centralized in `exit.rs`; clap parse errors → exit 10. Named tests `init_writes_valid_template`, `init_twice_is_idempotent` + 4 edge-case tests in `tests/init.rs`. No new deps.
+  - **Verification:** local `cargo fmt --all --check` only (no MSVC `link.exe`); CI read via public GitHub API (`gh` unauthenticated).
+  - **What's next:** `T-005` (`meshtree spawn`; deps `T-001`, `T-003`, `T-004` all done). Note: exit code for invalid config (10) is an implementation choice; §14 doesn't assign MT-050 a group.
+  - **Failing tests:** None.
 
 - **2026-10-30 (Claude Opus 5.5 · `T-003` done):**
   - **Current task:** `T-003` — **done**. CI run 41151157057 on `03405a9`: all 3 OS jobs (ubuntu/windows/macos) `success` (fmt, clippy `-D warnings`, `cargo test --workspace`).

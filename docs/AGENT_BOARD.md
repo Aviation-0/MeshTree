@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5
-- Task: T-004
-- Status: Doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -23,6 +23,9 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-30 | Claude Opus 5.5: T-004 complete. `meshtree init`: repo root via nearest .git; creates .meshtree/{worktrees,tasks,quarantine}, config.toml template, .gitignore (only config + task handoffs visible).
+  Idempotent (create_new, never overwrites); invalid existing config → MT-050 exit 10. §14 exit codes in crates/meshtree/src/exit.rs.
+  6 integration tests. 3-OS CI green (run 41151620305). Unblocks T-005 (spawn).
 - 2026-10-30 | Claude Opus 5.5: T-003 complete. meshtree-core::task: SPEC §8 machine (7 states, 9 edges), illegal → MT-004 (ADR-0002; MT-010/011 rejected as daemon codes).
   Monotonic t-+ULID allocator, clock/entropy injected (pure). 3 named unit tests + 4 proptest properties (arbitrary sequences, terminal absorption, ID order/bijection).
   3-OS CI green (run 41151157057). Unblocks T-004 (init) → T-005 (spawn). T-028 must map MT-004. gh CLI unauthenticated on host; CI read via public API.
