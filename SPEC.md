@@ -453,6 +453,7 @@ All tools return MeshTree error codes (§16) as MCP tool errors so agents can se
 | `MT-001` | claim conflict (path held by another task) | pick different paths or wait |
 | `MT-002` | lease expired mid-use | re-acquire before editing |
 | `MT-003` | coordination-ref CAS rejected (retryable) | internal; daemon retries |
+| `MT-004` | illegal task state transition (not an edge of the §8 diagram; ADR-0002) | re-read `task_status`; act on the current state |
 | `MT-010` | daemon unreachable | `meshtree daemon` not running |
 | `MT-011` | stale daemon lock | auto-recovered; informational |
 | `MT-020` | file locked by another process (Windows) | retry or wait for GC |
