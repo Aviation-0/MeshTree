@@ -9,6 +9,8 @@
 //! the caller (the §7 conflict rule lives in `pattern`), so replay itself has
 //! no opinion on glob semantics.
 
+pub mod coord;
+
 use crate::task::TaskId;
 use crate::time::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -97,11 +99,17 @@ impl Lease {
     /// Evaluated against the *holder's* timestamps, so a skewed observer clock
     /// only shifts the verdict by at most the skew, which `grace` absorbs (§9).
     pub fn is_expired_at(&self, now: Timestamp, skew_grace_secs: u64) -> bool {
+        now > self.expires_at(skew_grace_secs)
+    }
+
+    /// Last instant (holder clock) at which the lease is still live:
+    /// `last_heartbeat + ttl + grace`.
+    pub fn expires_at(&self, skew_grace_secs: u64) -> Timestamp {
         let window_ms = self
             .ttl_secs
             .saturating_add(skew_grace_secs)
             .saturating_mul(1000);
-        now.unix_ms() > self.last_heartbeat.unix_ms().saturating_add(window_ms)
+        Timestamp::from_unix_ms(self.last_heartbeat.unix_ms().saturating_add(window_ms))
     }
 }
 
@@ -282,6 +290,82 @@ mod tests {
             counter: 0,
             ttl_secs: None,
         }
+    }
+
+    /// Holder and observer clocks are offset from real time by `dh` / `dobs`
+    /// seconds. Within a relative skew of `skew_grace_secs`, no observer ever
+    /// sees a lease expire before its true TTL deadline (§9 holder-timestamp
+    /// expiry + grace), and every observer agrees it has expired by
+    /// `ttl + 2 × grace` after the real heartbeat.
+    #[test]
+    fn lease_ttl_expiry_with_injected_clock_skew() {
+        use EventType::*;
+        let (a, b) = tasks();
+        let ttl = CONFIG.default_ttl_secs as i64;
+        let grace = CONFIG.skew_grace_secs as i64;
+        let real_hb = 100_000i64;
+        let stamp = |real: i64, skew: i64| Timestamp::from_unix_ms(((real + skew) * 1000) as u64);
+        let skews = [-grace / 2, -60, -1, 0, 1, 60, grace / 2];
+
+        for &dh in &skews {
+            for &dobs in &skews {
+                let lease = Lease {
+                    path: "p".to_string(),
+                    task: a.clone(),
+                    machine: "mc-holder".to_string(),
+                    acquired_at: stamp(real_hb, dh),
+                    ttl_secs: ttl as u64,
+                    last_heartbeat: stamp(real_hb, dh),
+                };
+                for real_now in [real_hb, real_hb + ttl / 2, real_hb + ttl] {
+                    assert!(
+                        !lease.is_expired_at(stamp(real_now, dobs), grace as u64),
+                        "premature expiry: dh={dh} dobs={dobs} real_now={real_now}"
+                    );
+                }
+                assert!(
+                    lease.is_expired_at(stamp(real_hb + ttl + 2 * grace + 1, dobs), grace as u64),
+                    "never expired: dh={dh} dobs={dobs}"
+                );
+
+                // Replay: a skewed observer's sweep and rival ACQUIRE at the
+                // true deadline are a no-op and a rejection.
+                let log = vec![
+                    LeaseEvent {
+                        ts: stamp(real_hb, dh),
+                        ..ev("01", Acquire, "p", &a, "mc-holder", 0)
+                    },
+                    LeaseEvent {
+                        ts: stamp(real_hb + ttl, dobs),
+                        ..ev("02", ExpireSweep, "p", &a, "mc-observer", 0)
+                    },
+                    LeaseEvent {
+                        ts: stamp(real_hb + ttl, dobs),
+                        ..ev("03", Acquire, "p", &b, "mc-observer", 0)
+                    },
+                ];
+                let out = replay(&log, &CONFIG, exact);
+                assert_eq!(out.leases["p"].task, a, "dh={dh} dobs={dobs}");
+                assert_eq!(out.rejected.len(), 1, "dh={dh} dobs={dobs}");
+                assert_eq!(
+                    out.leases["p"].expires_at(grace as u64),
+                    Timestamp::from_unix_ms((((real_hb + dh) + ttl + grace) * 1000) as u64)
+                );
+            }
+        }
+
+        // The bound is real: relative skew beyond the grace window (holder
+        // slow by `grace`, observer fast by `grace`) can expire a lease at its
+        // true deadline. Larger grace is the documented mitigation (§21).
+        let lease = Lease {
+            path: "p".to_string(),
+            task: a,
+            machine: "mc-holder".to_string(),
+            acquired_at: stamp(real_hb, -grace),
+            ttl_secs: ttl as u64,
+            last_heartbeat: stamp(real_hb, -grace),
+        };
+        assert!(lease.is_expired_at(stamp(real_hb + ttl + 1, grace), grace as u64));
     }
 
     #[test]
