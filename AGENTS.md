@@ -22,6 +22,7 @@ All AI agents working in this repository (IDE orchestrator or terminal CLI) foll
 ## Session Ritual
 
 Every agent session must follow this ritual:
+0. Session start (mandatory, before anything else): `git pull origin main`. Multiple agents on multiple machines share this repo; no session may begin from stale state. If the pull fails or conflicts, stop and resolve it before reading the board or picking a task.
 1. Check `docs/AGENT_BOARD.md` at session start. Update the Active Lock at start, and append a concise (<= 5 lines) handoff entry upon completion while pruning the log to maintain a max 5-entry sliding window.
 2. Select the next unblocked task from `docs/tasks/backlog.md` and mark it `doing` in both `docs/tasks/backlog.md` and `docs/tasks/PROGRESS.md`.
 3. Implement strictly within the task's declared `Scope` fence, guided by its `Authority: SPEC §x` citations.
