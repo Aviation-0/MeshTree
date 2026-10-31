@@ -9,7 +9,7 @@ Anti-Bloat Constraints:
 
 ## Active Lock
 - Model: Claude Opus 5.5 (Windows)
-- Task: T-019 (shared-op FIFO queue + meshtree queue CLI)
+- Task: T-020 (serialized merge gate: collect & promote)
 - Status: doing
 
 ## Team Roster & Roles
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-31 | Claude Opus 5.5 (Windows): T-019 done (20/45). core::queue FIFO + dead-holder eviction; daemon queue RPCs; meshtree queue CLI; ADR-0005 allow_args (Proposed, needs human acceptance).
+  CI green (run 41223916867). Next: T-020 merge gate.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-018 done (19/45). meshtree daemon: lock+WAL+IPC, mutex-serialized claim/release RPCs (WAL-journaled), heartbeats, ttl x4 abandon sweep, deferred-push flush; CLI routes claims via daemon if up.
   CI green (run 41223643960) after closed-stdout panic fix. Next: T-019 (ADR-0005 allow_args, Proposed).
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-044 done (18/45). git children run LC_ALL=C; update_ref CasRejected only if ref moved; retry-exhaustion (5 pushes → MT-003) + local CAS retry tests.
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41222685141). Next: T-044 (gates T-018).
 - 2026-10-31 | Claude Opus 5.5 (Mac): audit T-003–T-015 (no regressions, 6 debts) → approved restructure T-043–T-045, ADR-0004. T-016 done (16/45): platform::lock flock/named-mutex guard + pid/boot_id record, MT-011 adoption.
   CI green (run 41215529894). Open: OS machine-id derivation unowned; ADR-0003 acceptance; §17 allow-list ADR blocks T-019. Next: T-017.
-- 2026-10-30 | Claude Opus 5.5: T-015 complete (15/42). platform::ipc NDJSON over UDS (0600 + parent check) / named pipe (owner+SYSTEM DACL, no remote, first-instance); MT-010 when unreachable. CI green (run 41155843711).
-  Needs human review: ADR-0003, §6-key ADR candidates (§13/§17/§11), unowned coord tasks/ registry. Next: T-016.
