@@ -204,10 +204,11 @@ pub struct Acquired {
 /// The held singleton lock; released (record cleared) on drop.
 #[derive(Debug)]
 pub struct DaemonLock {
+    // Declared first so it drops (unlocks) while `file` is still open.
+    _guard: sys::Guard,
     file: File,
     path: PathBuf,
     record: LockRecord,
-    _guard: sys::Guard,
 }
 
 impl DaemonLock {
@@ -259,10 +260,10 @@ impl DaemonLock {
         write_in_place(&mut file, &bytes).map_err(io_err("write"))?;
         Ok(Acquired {
             lock: DaemonLock {
+                _guard: guard,
                 file,
                 path,
                 record,
-                _guard: guard,
             },
             recovered,
         })
@@ -329,6 +330,7 @@ mod sys {
 
     const LOCK_EX: i32 = 2;
     const LOCK_NB: i32 = 4;
+    const LOCK_UN: i32 = 8;
     const EPERM: i32 = 1;
 
     extern "C" {
@@ -336,17 +338,20 @@ mod sys {
         fn kill(pid: i32, sig: i32) -> i32;
     }
 
-    /// `flock` held through the lock's own file descriptor; released when
-    /// [`super::DaemonLock`] closes the file or the process dies.
+    /// `flock` held through the lock's own file descriptor. Dropping it
+    /// unlocks explicitly: the lock belongs to the open file description, and
+    /// a concurrently forked child that has not yet exec'd holds a copy of
+    /// every fd, so a plain `close` would leave the lock held until that
+    /// child execs. The OS also releases it if the process dies.
     #[derive(Debug)]
-    pub struct Guard;
+    pub struct Guard(i32);
 
     impl Guard {
         pub fn try_acquire(file: &File, _repo_root: &Path) -> io::Result<Option<Self>> {
             loop {
                 // SAFETY: valid open fd for the duration of the call.
                 if unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) } == 0 {
-                    return Ok(Some(Guard));
+                    return Ok(Some(Guard(file.as_raw_fd())));
                 }
                 let err = io::Error::last_os_error();
                 match err.kind() {
@@ -355,6 +360,14 @@ mod sys {
                     _ => return Err(err),
                 }
             }
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            // SAFETY: the fd belongs to `DaemonLock::file`, which is still open
+            // (field order); unlocking cannot invalidate it.
+            unsafe { flock(self.0, LOCK_UN) };
         }
     }
 
@@ -508,7 +521,7 @@ mod sys {
     pub fn boot_id() -> io::Result<String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+            .map_err(io::Error::other)?
             .as_secs();
         // SAFETY: no arguments, cannot fail.
         let uptime = unsafe { GetTickCount64() } / 1000;

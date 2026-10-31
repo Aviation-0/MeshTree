@@ -315,3 +315,28 @@ fn daemon_lock_concurrent_acquire_exactly_one_wins() {
         }
     }
 }
+
+/// Regression: a release must free the lock even while other threads are
+/// spawning processes (a forked, not-yet-exec'd child holds copies of every
+/// fd, so closing the lock file alone left `flock` held).
+#[test]
+fn daemon_lock_release_survives_concurrent_spawns() {
+    let repo = TempRepo::new();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let refused = std::thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = Command::new("git")
+                        .arg("--version")
+                        .stdout(Stdio::null())
+                        .status();
+                }
+            });
+        }
+        let refused = (0..200).filter(|_| acquire(&repo).is_err()).count();
+        stop.store(true, Ordering::Relaxed);
+        refused
+    });
+    assert_eq!(refused, 0, "acquire refused right after a release");
+}
