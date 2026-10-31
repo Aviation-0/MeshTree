@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-31 | Claude Opus 5.5 (Windows): ADR review — ADR-0003/0005/0006 Accepted by Lucas Pan; SPEC §10 step 3 amended (ADR-0006).
+  ADR-0007 Proposed: /tmp/meshtree-<uid>/<hash16>.sock fallback for long Unix socket paths (needs acceptance + task T-046). Next: T-026.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-025 done (26/45), session end. Exclusive-handle (dwShareMode=0) collect + abort never fail; prune reclaims after release. ADR-0006 (Proposed): Windows blocks moving a dir with an exclusively open file → defer (MT-020).
   CI green (run 41228444158). Open: ADR-0006/0005/0003 acceptance, macOS SUN_LEN. Next: T-026.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-024 done (25/45). platform::teardown: backoff 250ms→8s, quarantine move (MT-021), else delete-what-we-can + reboot-delete (MT-020), never fails; gc_quarantine (daemon idle + prune); meshtree prune [--stale-only].
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41227946875). Next: T-024.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-022 done (23/45). platform::share: junction (FSCTL_SET_REPARSE_POINT) / clonefile / symlink, auto per OS, MT-040 fallback to none, non-following unlink.
   CI green (run 41227678198). Local clippy now covers linux + macOS targets. Next: T-023.
-- 2026-10-31 | Claude Opus 5.5 (Windows): T-021 done (22/45). Startup recovery before bind: WAL↔task.json reconcile, aged git-lock cleanup, integration reset, landed merges completed / interrupted collects → active; ping reports recovery_ms.
-  CI green (run 41226059939). Open: macOS deep repo paths overflow daemon.sock SUN_LEN (ADR needed); ADR-0005/0003. Next: T-022.

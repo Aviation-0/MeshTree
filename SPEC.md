@@ -329,7 +329,7 @@ MeshTree's teardown pipeline:
 
 1. **Pre-open discipline:** every file MeshTree creates opens with `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`.
 2. **Retry with backoff:** teardown retries with exponential backoff (250 ms → 8 s, ~6 attempts).
-3. **Quarantine:** on persistent failure, move the worktree (same-volume `MoveFileEx`, no cross-volume copy) to `.meshtree/quarantine/<task>/` and mark the task `merged` with a quarantine note. Quarantine is never on the failure path of a merge — cleanup failure must not fail the task.
+3. **Quarantine:** on persistent failure, move the worktree (same-volume `MoveFileEx`, no cross-volume copy) to `.meshtree/quarantine/<task>/` and mark the task `merged` with a quarantine note. If the move itself is blocked (Windows refuses to move a directory containing a file opened without `FILE_SHARE_DELETE`), delete everything deletable, register the remainder for deletion at reboot where permitted, and report `MT-020`; `meshtree prune` / the GC sweep reclaims the leftover (ADR-0006). Quarantine is never on the failure path of a merge — cleanup failure must not fail the task.
 4. **GC sweep:** the daemon retries quarantined trees at idle; as a last resort registers `MOVEFILE_DELAY_UNTIL_REBOOT`.
 
 ### IPC

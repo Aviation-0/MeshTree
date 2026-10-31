@@ -1,6 +1,6 @@
 # ADR-0003: Exact Glob-Intersection Test for Claim Conflicts
 
-- **Status:** Proposed (implemented in `T-009`; awaiting human acceptance — 2026-10-31 audit)
+- **Status:** Accepted (accepted by Lucas Pan, 2026-10-31; implemented in `T-009`)
 - **Date:** 2026-10-30
 - **Author:** Claude Opus 5.5 (Agent); flagged for review by Lucas Pan
 - **Authority:** `SPEC.md` §7 (path patterns & conflict rule), §17, §18; `AGENTS.md` Standing Order #1

@@ -1,6 +1,6 @@
 # ADR-0005: Per-Queue Argument Override Allow-List (`allow_args`)
 
-- **Status:** Proposed (implemented by `T-019`; pending human acceptance)
+- **Status:** Accepted (accepted by Lucas Pan, 2026-10-31; implemented by `T-019`)
 - **Date:** 2026-10-31
 - **Author:** Claude Opus 5.5 (Agent)
 - **Authority:** `SPEC.md` §6, §12, §15 (`request_shared_op.command_override`), §17; `AGENTS.md` Standing Order #1
