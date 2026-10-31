@@ -9,7 +9,7 @@ Anti-Bloat Constraints:
 
 ## Active Lock
 - Model: Claude Opus 5.5 (Windows)
-- Task: T-017 (WAL journaling & replay)
+- Task: T-044 (locale-safe git + retry-exhaustion tests)
 - Status: doing
 
 ## Team Roster & Roles
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-31 | Claude Opus 5.5 (Windows): T-017 done (17/45). platform::wal CRC-framed fsynced journal, torn-tail truncation, mid-log corruption refused, pure replay → WalState + anomalies (MT-004).
+  CI green (run 41222685141). Next: T-044 (gates T-018).
 - 2026-10-31 | Claude Opus 5.5 (Mac): audit T-003–T-015 (no regressions, 6 debts) → approved restructure T-043–T-045, ADR-0004. T-016 done (16/45): platform::lock flock/named-mutex guard + pid/boot_id record, MT-011 adoption.
   CI green (run 41215529894). Open: OS machine-id derivation unowned; ADR-0003 acceptance; §17 allow-list ADR blocks T-019. Next: T-017.
 - 2026-10-30 | Claude Opus 5.5: T-015 complete (15/42). platform::ipc NDJSON over UDS (0600 + parent check) / named pipe (owner+SYSTEM DACL, no remote, first-instance); MT-010 when unreachable. CI green (run 41155843711).
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   sync flushes deferred pushes + revokes claims lost to remote winners. CI green (run 41155551527). Open: coord tasks/<id>.json registry unassigned. Next: T-015.
 - 2026-10-30 | Claude Opus 5.5: T-013 complete. platform::coord::CoordStore::sync (fetch → union → replay → canonical tree → local CAS → push --force-with-lease; ×5 jittered retry; MT-003; offline ⇒ deferred push).
   Fixed: concurrent pushes lose at remote ref lock ("[remote rejected] failed to update ref") — now classified as lost race. CI green (run 41155358409). Next: T-014.
-- 2026-10-30 | Claude Opus 5.5: T-012 complete. Lease::expires_at + skew test (no premature expiry within relative skew ≤ grace). lease::coord codec: leases/<sha1>.json, log/<ULID>.json, canonical JSON, std-only SHA-1.
-  serde_json now a core dep. CI green (run 41154798925). Next: T-013.
