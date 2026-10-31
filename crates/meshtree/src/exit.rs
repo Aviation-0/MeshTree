@@ -5,7 +5,6 @@ pub const OK: u8 = 0;
 /// Usage error (bad arguments, not inside a git repository, invalid config).
 pub const USAGE: u8 = 10;
 /// Task or lease error (`MT-00x`).
-#[allow(dead_code)]
 pub const TASK: u8 = 20;
 /// Daemon error (`MT-01x`).
 #[allow(dead_code)]

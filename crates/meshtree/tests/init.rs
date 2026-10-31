@@ -1,78 +1,15 @@
 //! Integration tests for `meshtree init` (`SPEC.md` §5, §6, §14, §16).
 
+mod common;
+
+use common::{assert_exit, git, meshtree, TempDir};
 use meshtree_core::{Config, ERROR_CODE_CONFIG_INVALID};
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Temporary directory removed on drop. Stdlib-only, mirroring the
-/// `meshtree-platform` gitops tests.
-struct TempDir(PathBuf);
-
-static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-impl TempDir {
-    fn new() -> Self {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "meshtree-init-test-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&path).expect("create temp dir");
-        Self(path)
-    }
-
-    /// A temp directory holding a fresh `git init` repository.
-    fn repo() -> Self {
-        let dir = Self::new();
-        git(dir.path(), &["init", "-q", "-b", "main"]);
-        dir
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("utf-8 git output")
-}
+use std::path::Path;
+use std::process::Output;
 
 fn meshtree_init(cwd: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_meshtree"))
-        .arg("init")
-        .current_dir(cwd)
-        .output()
-        .expect("run meshtree init")
-}
-
-fn assert_exit(out: &Output, code: i32) {
-    assert_eq!(
-        out.status.code(),
-        Some(code),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    meshtree(cwd, &["init"])
 }
 
 #[test]
@@ -177,9 +114,7 @@ fn init_outside_git_repository_exits_usage() {
 
 #[test]
 fn unknown_subcommand_exits_usage() {
-    let out = Command::new(env!("CARGO_BIN_EXE_meshtree"))
-        .arg("no-such-command")
-        .output()
-        .expect("run meshtree");
+    let dir = TempDir::new();
+    let out = meshtree(dir.path(), &["no-such-command"]);
     assert_exit(&out, 10);
 }

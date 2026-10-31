@@ -6,14 +6,12 @@
 //! Idempotent: existing files are never overwritten. A pre-existing
 //! `config.toml` is validated and reported with `MT-050` if invalid.
 
-use crate::exit::{CliError, PLATFORM, USAGE};
+use crate::exit::{CliError, USAGE};
+use crate::repo::{platform_error, require_repo_root, MESHTREE_DIR};
 use meshtree_core::Config;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-
-/// Directory holding all MeshTree state inside the repository.
-pub const MESHTREE_DIR: &str = ".meshtree";
 
 /// Subdirectories created under `.meshtree/` (`SPEC.md` §5).
 pub const SUBDIRS: [&str; 3] = ["worktrees", "tasks", "quarantine"];
@@ -51,26 +49,9 @@ pub struct InitReport {
     pub gitignore: FileOutcome,
 }
 
-/// Finds the repository root: the nearest ancestor of `start` containing `.git`
-/// (a directory, or a file for linked worktrees and submodules).
-pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .find(|dir| dir.join(".git").exists())
-        .map(Path::to_path_buf)
-}
-
 /// Runs `meshtree init` from working directory `cwd`.
 pub fn run(cwd: &Path) -> Result<InitReport, CliError> {
-    let repo_root = find_repo_root(cwd).ok_or_else(|| {
-        CliError::new(
-            USAGE,
-            format!(
-                "not inside a git repository (no .git found above {})",
-                cwd.display()
-            ),
-        )
-    })?;
+    let repo_root = require_repo_root(cwd)?;
     let meshtree_dir = repo_root.join(MESHTREE_DIR);
 
     for sub in SUBDIRS {
@@ -116,8 +97,4 @@ fn write_if_absent(path: &Path, contents: &str) -> Result<FileOutcome, CliError>
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(FileOutcome::Kept),
         Err(err) => Err(platform_error(path, &err)),
     }
-}
-
-fn platform_error(path: &Path, err: &io::Error) -> CliError {
-    CliError::new(PLATFORM, format!("{}: {err}", path.display()))
 }

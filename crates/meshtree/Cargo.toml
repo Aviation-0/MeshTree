@@ -12,3 +12,4 @@ path = "src/main.rs"
 clap.workspace = true
 meshtree-core.workspace = true
 meshtree-platform.workspace = true
+serde_json.workspace = true

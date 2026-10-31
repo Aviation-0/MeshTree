@@ -5,9 +5,9 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M0 — Walking Skeleton & Core Lease Foundations` (Week 1 · Target: `2026-11-08`)
-- **In-Progress Task (`doing`):** None
+- **In-Progress Task (`doing`):** `T-005` — `meshtree spawn` (`crates/meshtree` + `platform::gitops`, Claude Opus 5.5)
 - **Next Up (`todo`, dependencies satisfied):**
-  1. `T-005` — `meshtree spawn` (`crates/meshtree` + `platform::gitops`; deps `T-001`/`T-003`/`T-004` done)
+  1. `T-006` — `meshtree status` / `abort` (unblocked once `T-005` is done)
   2. `T-007` — Lease event model + ordering key (`crates/meshtree-core`, independent pure core)
   3. `T-009` — Path-pattern normalization + conflict rule (`crates/meshtree-core`, independent pure core)
 - **Last Session Summary (2026-10-30, Claude Opus 5.5):** `T-004` done — `meshtree init` (idempotent template + `.meshtree/` layout + `.gitignore`, §14 exit codes), 6 integration tests, 3-OS CI green (run 41151620305). Earlier: `T-003` done — `meshtree-core::task` with `Task`, monotonic `"t-" + ULID` allocator, §8 state machine (7 statuses, 9 edges), `MT-004` illegal-transition errors (`ADR-0002`), named unit tests + proptest lifecycle invariants. 3-OS CI green (run 41151157057). Prior: `T-002` done (`config`, run 41149054292).
@@ -18,14 +18,14 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 
 | Milestone | Window | Tasks | Total | `done` | `doing` | `blocked` | `todo` | Status |
 |---|---|---|---|---|---|---|---|---|
-| **M0 — Walking Skeleton & Core Lease Foundations** | Week 1 (`→ 2026-11-08`) | `T-001`–`T-010` | 10 | 4 | 0 | 0 | 6 | `doing` |
+| **M0 — Walking Skeleton & Core Lease Foundations** | Week 1 (`→ 2026-11-08`) | `T-001`–`T-010` | 10 | 4 | 1 | 0 | 5 | `doing` |
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 0 | 0 | 0 | 4 | `todo` |
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021` | 7 | 0 | 0 | 0 | 7 | `todo` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029` | 8 | 0 | 0 | 0 | 8 | `todo` |
 | **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033` | 4 | 0 | 0 | 0 | 4 | `todo` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036` | 3 | 0 | 0 | 0 | 3 | `todo` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-038`** | **38** | **4** | **0** | **0** | **34** | **11% (`4 / 38`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-038`** | **38** | **4** | **1** | **0** | **33** | **11% (`4 / 38`)** |
 
 ---
 
