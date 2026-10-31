@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use meshtree_platform::gitops::{CliGitOps, GitError, GitOps};
+use meshtree_platform::gitops::{CliGitOps, GitError, GitOps, TreeEntry, ERROR_CODE_CAS_REJECTED};
 
 /// A fresh temp git repo with one commit on `main` and a deterministic
 /// identity (no reliance on the host's global git config). Stdlib-only so
@@ -16,7 +16,7 @@ struct TempRepo(PathBuf);
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl TempRepo {
-    fn new() -> Self {
+    fn temp_path() -> PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!(
             "meshtree-gitops-test-{}-{}",
@@ -24,7 +24,28 @@ impl TempRepo {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&path).expect("create temp dir");
-        let repo = Self(path);
+        path
+    }
+
+    /// A bare repository standing in for the GitHub remote.
+    fn bare() -> Self {
+        let repo = Self(Self::temp_path());
+        repo.git(&["init", "--bare", "-q"]);
+        repo
+    }
+
+    /// `file://` URL for this repository (`file:///C:/…` on Windows).
+    fn file_url(&self) -> String {
+        let path = self.0.to_string_lossy().replace('\\', "/");
+        if path.starts_with('/') {
+            format!("file://{path}")
+        } else {
+            format!("file:///{path}")
+        }
+    }
+
+    fn new() -> Self {
+        let repo = Self(Self::temp_path());
         repo.git(&["init", "-b", "main"]);
         repo.git(&["config", "user.email", "meshtree-test@example.com"]);
         repo.git(&["config", "user.name", "MeshTree Test"]);
@@ -153,5 +174,92 @@ fn gitops_update_ref_cas_accepts_and_rejects() {
     assert_eq!(
         ops.ref_read("refs/meshtree/coord").unwrap().as_deref(),
         Some(head2.as_str())
+    );
+}
+
+const COORD: &str = "refs/meshtree/coord";
+const TRACKING: &str = "refs/meshtree/remotes/origin/coord";
+
+/// Builds an orphan-ref commit whose tree is `log/<name>` = `body`
+/// (hash-object → mktree ×2 → commit-tree, `SPEC.md` Appendix A).
+fn coord_commit(ops: &CliGitOps, name: &str, body: &str, parents: &[&str]) -> String {
+    let blob = ops.hash_object(body.as_bytes()).expect("hash-object");
+    let log = ops
+        .mktree(&[TreeEntry::blob(name, blob)])
+        .expect("mktree log/");
+    let root = ops
+        .mktree(&[TreeEntry::tree("log", log)])
+        .expect("mktree root");
+    ops.commit_tree(&root, parents, "meshtree: coord")
+        .expect("commit-tree")
+}
+
+fn assert_mt003(err: GitError) {
+    assert_eq!(err.code(), Some(ERROR_CODE_CAS_REJECTED), "{err}");
+    assert!(
+        matches!(err, GitError::RemoteCasRejected { ref reference, .. } if reference == COORD),
+        "{err}"
+    );
+}
+
+#[test]
+fn gitops_remote_cas_push_accepts_and_rejects_stale_oid() {
+    let remote = TempRepo::bare();
+    let (a, b) = (TempRepo::new(), TempRepo::new());
+    for repo in [&a, &b] {
+        repo.git(&["remote", "add", "origin", &remote.file_url()]);
+    }
+    let (ga, gb) = (CliGitOps::new(a.path()), CliGitOps::new(b.path()));
+
+    // Absent remote ref: fetch reports None and leaves the tracking ref alone.
+    assert_eq!(gb.fetch_ref("origin", COORD, TRACKING).unwrap(), None);
+    assert_eq!(gb.ref_read(TRACKING).unwrap(), None);
+
+    // A creates the orphan ref (expected old = absent).
+    let c1 = coord_commit(&ga, "01A.json", "{\"a\":1}\n", &[]);
+    ga.push_ref_cas("origin", COORD, &c1, None)
+        .expect("create on empty remote");
+
+    // B also expects "absent": stale → MT-003.
+    let b1 = coord_commit(&gb, "01B.json", "{\"b\":1}\n", &[]);
+    assert_mt003(
+        gb.push_ref_cas("origin", COORD, &b1, None)
+            .expect_err("create over existing ref"),
+    );
+
+    // B fetches A's commit and reads the tree back through plumbing.
+    assert_eq!(
+        gb.fetch_ref("origin", COORD, TRACKING).unwrap().as_deref(),
+        Some(c1.as_str())
+    );
+    let entries = gb.ls_tree(&c1).expect("ls-tree");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path, "log/01A.json");
+    assert_eq!(entries[0].kind, "blob");
+    assert_eq!(gb.cat_blob(&entries[0].oid).unwrap(), b"{\"a\":1}\n");
+
+    // A advances with the correct lease.
+    let c2 = coord_commit(&ga, "01C.json", "{}\n", &[&c1]);
+    ga.push_ref_cas("origin", COORD, &c2, Some(&c1))
+        .expect("CAS with current expected old");
+
+    // B's lease on c1 is now stale → MT-003; the remote keeps A's value.
+    let b2 = coord_commit(&gb, "01B.json", "{\"b\":1}\n", &[&c1]);
+    assert_mt003(
+        gb.push_ref_cas("origin", COORD, &b2, Some(&c1))
+            .expect_err("CAS with stale expected old"),
+    );
+    assert_eq!(
+        gb.fetch_ref("origin", COORD, TRACKING).unwrap().as_deref(),
+        Some(c2.as_str())
+    );
+
+    // B retries on top of the winner and succeeds.
+    let b3 = coord_commit(&gb, "01B.json", "{\"b\":1}\n", &[&c2]);
+    gb.push_ref_cas("origin", COORD, &b3, Some(&c2))
+        .expect("retry on fresh expected old");
+    assert_eq!(
+        ga.fetch_ref("origin", COORD, TRACKING).unwrap().as_deref(),
+        Some(b3.as_str())
     );
 }

@@ -10,8 +10,16 @@
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+
+/// Error code for a rejected coordination-ref CAS per `SPEC.md` §16.
+pub const ERROR_CODE_CAS_REJECTED: &str = "MT-003";
+
+/// Fixed identity for machine-written coordination commits (`commit_tree`),
+/// so they never depend on the host's git config.
+const COORD_IDENTITY: (&str, &str) = ("MeshTree", "meshtree@localhost");
 
 /// Errors returned by [`GitOps`] implementations.
 #[derive(Debug)]
@@ -33,6 +41,26 @@ pub enum GitError {
         reference: String,
         expected_old: String,
     },
+    /// A `push --force-with-lease` was rejected because the remote ref no
+    /// longer matched the expected old OID (`None` = expected absent) —
+    /// another machine won the race (`SPEC.md` §9, `MT-003`).
+    RemoteCasRejected {
+        remote: String,
+        reference: String,
+        expected_old: Option<String>,
+    },
+}
+
+impl GitError {
+    /// MeshTree error code (`SPEC.md` §16), if this error has one.
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            GitError::CasRejected { .. } | GitError::RemoteCasRejected { .. } => {
+                Some(ERROR_CODE_CAS_REJECTED)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for GitError {
@@ -53,6 +81,51 @@ impl fmt::Display for GitError {
                 f,
                 "CAS rejected for `{reference}`: expected old OID `{expected_old}` is stale"
             ),
+            GitError::RemoteCasRejected {
+                remote,
+                reference,
+                expected_old,
+            } => write!(
+                f,
+                "[{ERROR_CODE_CAS_REJECTED}] push of `{reference}` to `{remote}` rejected: \
+                 expected old OID {} is stale",
+                expected_old.as_deref().unwrap_or("(absent)")
+            ),
+        }
+    }
+}
+
+/// One entry of a git tree, as listed by `ls-tree` and consumed by `mktree`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeEntry {
+    /// File mode, e.g. `100644` (blob) or `040000` (tree).
+    pub mode: String,
+    /// Object type: `blob` or `tree`.
+    pub kind: String,
+    /// Object ID.
+    pub oid: String,
+    /// Name (for `mktree`, a single path component) or full path (`ls_tree`).
+    pub path: String,
+}
+
+impl TreeEntry {
+    /// A regular-file blob entry.
+    pub fn blob(name: impl Into<String>, oid: impl Into<String>) -> Self {
+        Self {
+            mode: "100644".to_string(),
+            kind: "blob".to_string(),
+            oid: oid.into(),
+            path: name.into(),
+        }
+    }
+
+    /// A subtree entry.
+    pub fn tree(name: impl Into<String>, oid: impl Into<String>) -> Self {
+        Self {
+            mode: "040000".to_string(),
+            kind: "tree".to_string(),
+            oid: oid.into(),
+            path: name.into(),
         }
     }
 }
@@ -98,6 +171,30 @@ pub trait GitOps {
         new_oid: &str,
         expected_old: Option<&str>,
     ) -> Result<(), GitError>;
+    /// `git hash-object -w --stdin` → blob OID.
+    fn hash_object(&self, contents: &[u8]) -> Result<String, GitError>;
+    /// `git mktree -z` over single-level `entries` → tree OID.
+    fn mktree(&self, entries: &[TreeEntry]) -> Result<String, GitError>;
+    /// `git commit-tree <tree> [-p <parent>]… -m <message>` → commit OID,
+    /// authored by a fixed MeshTree identity.
+    fn commit_tree(&self, tree: &str, parents: &[&str], message: &str) -> Result<String, GitError>;
+    /// `git ls-tree -r -z <treeish>` → every blob, with full paths.
+    fn ls_tree(&self, treeish: &str) -> Result<Vec<TreeEntry>, GitError>;
+    /// `git cat-file blob <oid>` → raw bytes.
+    fn cat_blob(&self, oid: &str) -> Result<Vec<u8>, GitError>;
+    /// Fetches `src` from `remote` into local ref `dst` (forced). Returns the
+    /// fetched OID, or `None` (leaving `dst` untouched) if `remote` has no `src`.
+    fn fetch_ref(&self, remote: &str, src: &str, dst: &str) -> Result<Option<String>, GitError>;
+    /// Cross-machine CAS (Appendix A): `git push <remote> <new-oid>:<reference>
+    /// --force-with-lease=<reference>:<expected-old>`; `None` requires the
+    /// remote ref to be absent. A lost race is [`GitError::RemoteCasRejected`].
+    fn push_ref_cas(
+        &self,
+        remote: &str,
+        reference: &str,
+        new_oid: &str,
+        expected_old: Option<&str>,
+    ) -> Result<(), GitError>;
 }
 
 /// [`GitOps`] backend that shells out to the `git` CLI in `repo`.
@@ -120,16 +217,42 @@ impl CliGitOps {
     }
 
     fn run(&self, args: &[&OsStr]) -> Result<Output, GitError> {
+        self.run_with(args, None, &[])
+    }
+
+    /// Runs `git -C <repo> <args>` with optional stdin bytes and extra env.
+    fn run_with(
+        &self,
+        args: &[&OsStr],
+        stdin: Option<&[u8]>,
+        envs: &[(&str, &str)],
+    ) -> Result<Output, GitError> {
         let context = self.context(args);
-        let output = Command::new("git")
+        let spawn_err = |source| GitError::Spawn {
+            context: context.clone(),
+            source,
+        };
+        let mut command = Command::new("git");
+        command
             .arg("-C")
             .arg(&self.repo)
             .args(args)
-            .output()
-            .map_err(|source| GitError::Spawn {
-                context: context.clone(),
-                source,
-            })?;
+            .envs(envs.iter().copied())
+            .stdin(if stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(spawn_err)?;
+        if let Some(bytes) = stdin {
+            // Inputs are small (one event / one tree level), so writing before
+            // reading cannot fill the output pipes.
+            let mut pipe = child.stdin.take().expect("stdin is piped");
+            pipe.write_all(bytes).map_err(spawn_err)?;
+        }
+        let output = child.wait_with_output().map_err(spawn_err)?;
         if output.status.success() {
             Ok(output)
         } else {
@@ -253,4 +376,146 @@ impl GitOps for CliGitOps {
             },
         }
     }
+
+    fn hash_object(&self, contents: &[u8]) -> Result<String, GitError> {
+        let output = self.run_with(
+            &[
+                OsStr::new("hash-object"),
+                OsStr::new("-w"),
+                OsStr::new("--no-filters"),
+                OsStr::new("--stdin"),
+            ],
+            Some(contents),
+            &[],
+        )?;
+        Ok(stdout_line(&output))
+    }
+
+    fn mktree(&self, entries: &[TreeEntry]) -> Result<String, GitError> {
+        let mut input = Vec::new();
+        for e in entries {
+            input.extend_from_slice(
+                format!("{} {} {}\t{}", e.mode, e.kind, e.oid, e.path).as_bytes(),
+            );
+            input.push(0);
+        }
+        let output = self.run_with(&[OsStr::new("mktree"), OsStr::new("-z")], Some(&input), &[])?;
+        Ok(stdout_line(&output))
+    }
+
+    fn commit_tree(&self, tree: &str, parents: &[&str], message: &str) -> Result<String, GitError> {
+        let mut args: Vec<&OsStr> = vec![
+            OsStr::new("commit-tree"),
+            OsStr::new("--no-gpg-sign"),
+            OsStr::new(tree),
+        ];
+        for parent in parents {
+            args.push(OsStr::new("-p"));
+            args.push(OsStr::new(parent));
+        }
+        args.push(OsStr::new("-m"));
+        args.push(OsStr::new(message));
+        let (name, email) = COORD_IDENTITY;
+        let output = self.run_with(
+            &args,
+            None,
+            &[
+                ("GIT_AUTHOR_NAME", name),
+                ("GIT_AUTHOR_EMAIL", email),
+                ("GIT_COMMITTER_NAME", name),
+                ("GIT_COMMITTER_EMAIL", email),
+            ],
+        )?;
+        Ok(stdout_line(&output))
+    }
+
+    fn ls_tree(&self, treeish: &str) -> Result<Vec<TreeEntry>, GitError> {
+        let output = self.run(&[
+            OsStr::new("ls-tree"),
+            OsStr::new("-r"),
+            OsStr::new("-z"),
+            OsStr::new(treeish),
+        ])?;
+        let mut entries = Vec::new();
+        // Records: "<mode> SP <type> SP <oid> TAB <path>" NUL-terminated.
+        for record in output.stdout.split(|&b| b == 0).filter(|r| !r.is_empty()) {
+            let record = String::from_utf8_lossy(record);
+            let (meta, path) = record.split_once('\t').unwrap_or((&*record, ""));
+            let mut fields = meta.split(' ');
+            entries.push(TreeEntry {
+                mode: fields.next().unwrap_or_default().to_string(),
+                kind: fields.next().unwrap_or_default().to_string(),
+                oid: fields.next().unwrap_or_default().to_string(),
+                path: path.to_string(),
+            });
+        }
+        Ok(entries)
+    }
+
+    fn cat_blob(&self, oid: &str) -> Result<Vec<u8>, GitError> {
+        let output = self.run(&[OsStr::new("cat-file"), OsStr::new("blob"), OsStr::new(oid)])?;
+        Ok(output.stdout)
+    }
+
+    fn fetch_ref(&self, remote: &str, src: &str, dst: &str) -> Result<Option<String>, GitError> {
+        // `ls-remote` first: fetching a missing ref is an error, not "absent".
+        let listed = self.run(&[OsStr::new("ls-remote"), OsStr::new(remote), OsStr::new(src)])?;
+        let exists = String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .any(|l| l.split('\t').nth(1) == Some(src));
+        if !exists {
+            return Ok(None);
+        }
+        let refspec = format!("+{src}:{dst}");
+        self.run(&[
+            OsStr::new("fetch"),
+            OsStr::new("--quiet"),
+            OsStr::new("--no-tags"),
+            OsStr::new(remote),
+            OsStr::new(&refspec),
+        ])?;
+        self.ref_read(dst)
+    }
+
+    fn push_ref_cas(
+        &self,
+        remote: &str,
+        reference: &str,
+        new_oid: &str,
+        expected_old: Option<&str>,
+    ) -> Result<(), GitError> {
+        let refspec = format!("{new_oid}:{reference}");
+        let lease = format!(
+            "--force-with-lease={reference}:{}",
+            expected_old.unwrap_or("")
+        );
+        // Neither `--porcelain` nor `--quiet`: the per-ref rejection reason
+        // ("stale info") must land on stderr, which `NonZeroExit` captures.
+        let args = [
+            OsStr::new("push"),
+            OsStr::new(&lease),
+            OsStr::new(remote),
+            OsStr::new(&refspec),
+        ];
+        match self.run(&args) {
+            Ok(_) => Ok(()),
+            Err(GitError::NonZeroExit { stderr, .. })
+                if stderr.contains("stale info")
+                    || stderr.contains("[rejected]")
+                    || stderr.contains("fetch first") =>
+            {
+                Err(GitError::RemoteCasRejected {
+                    remote: remote.to_string(),
+                    reference: reference.to_string(),
+                    expected_old: expected_old.map(str::to_string),
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// First line of stdout, trimmed (an OID for the plumbing commands above).
+fn stdout_line(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
