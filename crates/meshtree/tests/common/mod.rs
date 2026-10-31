@@ -44,9 +44,11 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 impl TempDir {
     pub fn new() -> Self {
         annotate_panics_in_ci();
+        // Short name: macOS resolves the temp dir to /private/var/folders/…
+        // and a Unix socket path (.meshtree/daemon.sock) must fit in 103 bytes.
         let mut path = std::env::temp_dir();
         path.push(format!(
-            "meshtree-cli-test-{}-{}",
+            "mt-cli-{}-{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
