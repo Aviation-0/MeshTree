@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5
-- Task: T-005
-- Status: Doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -23,6 +23,9 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-30 | Claude Opus 5.5: T-005 complete. `meshtree spawn`: ULID → task.json (spawning) → worktree add meshtree/<id> → active|failed; atomic temp+rename writes.
+  Bad base rejected pre-write (exit 10). std-only clock/entropy/RFC 3339 (src/clock.rs); repo/config helpers in src/repo.rs. 5 integration tests. CI green (run 41152201797).
+  Deferred: sharing T-023, coord registry + --claim T-013/14, OS machine-id T-016. Flag: Config::template() hard-codes machine id "mc-lucas-mac". Next: T-006.
 - 2026-10-30 | Claude Opus 5.5: T-004 complete. `meshtree init`: repo root via nearest .git; creates .meshtree/{worktrees,tasks,quarantine}, config.toml template, .gitignore (only config + task handoffs visible).
   Idempotent (create_new, never overwrites); invalid existing config → MT-050 exit 10. §14 exit codes in crates/meshtree/src/exit.rs.
   6 integration tests. 3-OS CI green (run 41151620305). Unblocks T-005 (spawn).

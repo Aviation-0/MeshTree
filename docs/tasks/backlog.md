@@ -26,7 +26,7 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 | `T-002` | M0 | `done` | Config load & validation | — | `crates/meshtree-core` (module `config`) | `SPEC` §6, §11, §12, §16 (`MT-050`) | Serde parse of `.meshtree/config.toml` spec fields and typed `MT-050` errors; named unit tests `config_parses_spec_example` and `config_rejects_invalid_fields_with_mt050` pass. |
 | `T-003` | M0 | `done` | Task model + ID allocation | — | `crates/meshtree-core` (module `task`) | `SPEC` §7, §8 | `Task` record, `"t-" + ULID` ID allocation, and §8 state transitions; named unit tests `task_id_ulid_format_and_monotonic`, `task_json_serde_roundtrip`, and `task_status_state_machine_transitions` pass. |
 | `T-004` | M0 | `done` | `meshtree init` CLI | `T-002` | `crates/meshtree` | `SPEC` §5, §6, §14, §16 | Writes `.meshtree/config.toml` template idempotently and initializes `.meshtree/`; named integration tests `init_writes_valid_template` and `init_twice_is_idempotent` pass. |
-| `T-005` | M0 | `doing` | `meshtree spawn` | `T-001`, `T-003`, `T-004` | `crates/meshtree` + `platform::gitops` | `SPEC` §5, §7, §8, §14 | Creates worktree + `meshtree/<task-id>` branch + `.meshtree/tasks/<id>/task.json`; named integration test `spawn_creates_worktree_branch_and_task_json` passes on a temp repo. |
+| `T-005` | M0 | `done` | `meshtree spawn` | `T-001`, `T-003`, `T-004` | `crates/meshtree` + `platform::gitops` | `SPEC` §5, §7, §8, §14 | Creates worktree + `meshtree/<task-id>` branch + `.meshtree/tasks/<id>/task.json`; named integration test `spawn_creates_worktree_branch_and_task_json` passes on a temp repo. |
 | `T-006` | M0 | `todo` | `meshtree status` / `meshtree abort` | `T-005` | `crates/meshtree` | `SPEC` §8, §14, §16 | Lists tasks from registry (`--json` supported) and `abort` removes worktree + updates record to `abandoned`; named integration tests `status_lists_registry_entries` and `abort_removes_worktree_and_marks_abandoned` pass. |
 | `T-007` | M0 | `todo` | Lease event model + ordering key | — | `crates/meshtree-core` (module `lease`) | `SPEC` §7, §9, §18 | Event types `ACQUIRE`/`RELEASE`/`HEARTBEAT`/`EXPIRE_SWEEP` and ordering key `(ts, counter, machine, id)` defined; named unit tests `lease_event_serde_and_ordering_key` and `replay_handcrafted_event_log` pass. |
 | `T-008` | M0 | `todo` | Deterministic replay → lease table | `T-007` | `crates/meshtree-core` | `SPEC` §9, §16 (`MT-001`), §18 | Named property test `replay_determinism_200_random_streams` (`proptest` over ≥ 200 randomized event streams and permutations) asserts byte-identical derived `LeaseTable` and `REJECTED` (`MT-001`) audit outputs. |
@@ -64,6 +64,13 @@ One task at a time: pick the lowest-numbered task whose `Status` is `todo` and w
 ---
 
 ## Handoff log
+
+- **2026-10-30 (Claude Opus 5.5 · `T-005` done):**
+  - **Current task:** `T-005` — **done**. CI run 41152201797 on `d676c97`: all 3 OS jobs `success` (fmt, clippy `-D warnings`, `cargo test --workspace`).
+  - **What's done:** `meshtree spawn <name> [--base] [--agent]` (`crates/meshtree/src/spawn.rs`): ULID ID → `task.json` as `spawning` → `GitOps::worktree_add` (`meshtree/<id>` at `.meshtree/worktrees/<id>`) → `active` (or `failed` on setup error), `task.json` written via temp+rename. Unknown base rejected before any write (exit 10); missing init → exit 10. `src/clock.rs` (std-only clock, `RandomState` entropy, RFC 3339), `src/repo.rs` (repo root + config load, shared with `init`). Named test `spawn_creates_worktree_branch_and_task_json` + 4 more; shared helpers in `tests/common/mod.rs`. `serde_json` now a normal dep of the bin.
+  - **Deferred (per backlog):** dependency sharing (`T-023`), coord-ref `tasks/<id>.json` + `--claim` (`T-013`/`T-014`), OS machine-id (`T-016`; host-name fallback for now).
+  - **Spotted:** `Config::template()` (`T-002`, core) hard-codes `[machine] id = "mc-lucas-mac"`, so every `init` gives every machine that id and spawn records it. Should be commented out in the template; outside this task's fence.
+  - **What's next:** `T-006` (`meshtree status` / `abort`). **Failing tests:** None.
 
 - **2026-10-30 (Claude Opus 5.5 · `T-004` done):**
   - **Current task:** `T-004` — **done**. CI run 41151620305 on `b71c8c3`: all 3 OS jobs `success` (fmt, clippy `-D warnings`, `cargo test --workspace`).
