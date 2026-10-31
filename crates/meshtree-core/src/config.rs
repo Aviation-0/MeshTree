@@ -48,7 +48,7 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// Root configuration model loaded from `.meshtree/config.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Config {
     /// Project-level branch and validation settings.
     #[serde(default)]
@@ -70,18 +70,6 @@ pub struct Config {
     /// Machine identity configuration (optional).
     #[serde(default)]
     pub machine: Option<MachineConfig>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            project: ProjectConfig::default(),
-            lease: LeaseConfig::default(),
-            share: Vec::new(),
-            queue: BTreeMap::new(),
-            machine: None,
-        }
-    }
 }
 
 impl Config {
@@ -266,10 +254,11 @@ impl LeaseConfig {
                 "lease.heartbeat_secs must be greater than 0",
             ));
         }
-        if self.heartbeat_secs >= self.ttl_secs {
+        let hb = self.heartbeat_secs;
+        let ttl = self.ttl_secs;
+        if hb >= ttl {
             return Err(ConfigError::new(format!(
-                "lease.heartbeat_secs ({}) must be strictly less than lease.ttl_secs ({})",
-                self.heartbeat_secs, self.ttl_secs
+                "lease.heartbeat_secs ({hb}) must be strictly less than lease.ttl_secs ({ttl})"
             )));
         }
         Ok(())
@@ -342,16 +331,15 @@ impl ShareConfig {
                 "share[{index}].source must not be empty"
             )));
         }
+        let src = &self.source;
         if trimmed.starts_with('/') || trimmed.starts_with('\\') || trimmed.contains(':') {
             return Err(ConfigError::new(format!(
-                "share[{index}].source must be a relative path, got '{}'",
-                self.source
+                "share[{index}].source must be a relative path, got '{src}'"
             )));
         }
         if trimmed.split(['/', '\\']).any(|segment| segment == "..") {
             return Err(ConfigError::new(format!(
-                "share[{index}].source cannot contain parent directory traversal ('..'), got '{}'",
-                self.source
+                "share[{index}].source cannot contain parent directory traversal ('..'), got '{src}'"
             )));
         }
         Ok(())
@@ -399,12 +387,15 @@ pub struct MachineConfig {
 impl MachineConfig {
     /// Validates machine configuration fields.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if let Some(ref id) = self.id {
-            if id.trim().is_empty() {
-                return Err(ConfigError::new(
-                    "machine.id must not be empty when specified",
-                ));
-            }
+        if self
+            .id
+            .as_deref()
+            .map(|id| id.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return Err(ConfigError::new(
+                "machine.id must not be empty when specified",
+            ));
         }
         Ok(())
     }
