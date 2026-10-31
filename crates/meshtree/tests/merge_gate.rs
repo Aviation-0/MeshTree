@@ -131,8 +131,11 @@ fn collect_merges_and_promotes_cleanly() {
     let out = meshtree(root, &["promote"]);
     assert_exit(&out, 0);
     assert_eq!(rev(root, "main").unwrap(), integration);
+    // Windows runners check out with core.autocrlf=true.
     assert_eq!(
-        fs::read_to_string(root.join("src/a/one.txt")).unwrap(),
+        fs::read_to_string(root.join("src/a/one.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "a\n"
     );
     assert_exit(&meshtree(root, &["promote"]), 0); // up to date
