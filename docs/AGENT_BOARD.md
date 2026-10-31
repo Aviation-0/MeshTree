@@ -9,7 +9,7 @@ Anti-Bloat Constraints:
 
 ## Active Lock
 - Model: Claude Opus 5.5 (Windows)
-- Task: T-023 (share links in spawn, <5 s test)
+- Task: T-024 (teardown backoff, quarantine, prune)
 - Status: doing
 
 ## Team Roster & Roles
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-31 | Claude Opus 5.5 (Windows): T-023 done (24/45). spawn links [[share]] dirs (MT-040 never fails spawn), info/exclude for links; all worktree deletions unlink shares first.
+  CI green (run 41227946875). Next: T-024.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-022 done (23/45). platform::share: junction (FSCTL_SET_REPARSE_POINT) / clonefile / symlink, auto per OS, MT-040 fallback to none, non-following unlink.
   CI green (run 41227678198). Local clippy now covers linux + macOS targets. Next: T-023.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-021 done (22/45). Startup recovery before bind: WAL↔task.json reconcile, aged git-lock cleanup, integration reset, landed merges completed / interrupted collects → active; ping reports recovery_ms.
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41224611824) after Windows CRLF test fix. Open: ADR-0005 + ADR-0003 acceptance. Next: T-021.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-019 done (20/45). core::queue FIFO + dead-holder eviction; daemon queue RPCs; meshtree queue CLI; ADR-0005 allow_args (Proposed, needs human acceptance).
   CI green (run 41223916867). Next: T-020 merge gate.
-- 2026-10-31 | Claude Opus 5.5 (Windows): T-018 done (19/45). meshtree daemon: lock+WAL+IPC, mutex-serialized claim/release RPCs (WAL-journaled), heartbeats, ttl x4 abandon sweep, deferred-push flush; CLI routes claims via daemon if up.
-  CI green (run 41223643960) after closed-stdout panic fix. Next: T-019 (ADR-0005 allow_args, Proposed).
