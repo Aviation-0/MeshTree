@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5
-- Task: T-008
-- Status: Doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -23,6 +23,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-30 | Claude Opus 5.5: T-008 complete. tests/lease_replay_props.rs: 256 random logs vs shuffled/duplicated/split-union copies → byte-identical lease table + MT-001 rejections; no cross-task conflicting leases.
+  Extreme-TTL no-panic property. CI green (run 41153826336). Next: T-009.
 - 2026-10-30 | Claude Opus 5.5: T-007 complete. core::lease event model + (ts,counter,machine,id) key, holder-ts expiry (ttl+grace), replay() w/ id de-dup + MT-001 Rejections; overlap = caller predicate (T-009 plugs in).
   core::time::Timestamp canonical RFC 3339 ms. 2 named tests. CI green (run 41153630251). Next: T-008.
 - 2026-10-30 | Claude Opus 5.5: T-006 complete. status (text/--json; missing tasks/ = empty, malformed warned+skipped) + abort (active→abandoned, worktree removed, branch kept; else MT-004 exit 20). 5 tests. CI green (run 41153075068).
@@ -34,6 +36,3 @@ Anti-Bloat Constraints:
 - 2026-10-30 | Claude Opus 5.5: T-004 complete. `meshtree init`: repo root via nearest .git; creates .meshtree/{worktrees,tasks,quarantine}, config.toml template, .gitignore (only config + task handoffs visible).
   Idempotent (create_new, never overwrites); invalid existing config → MT-050 exit 10. §14 exit codes in crates/meshtree/src/exit.rs.
   6 integration tests. 3-OS CI green (run 41151620305). Unblocks T-005 (spawn).
-- 2026-10-30 | Claude Opus 5.5: T-003 complete. meshtree-core::task: SPEC §8 machine (7 states, 9 edges), illegal → MT-004 (ADR-0002; MT-010/011 rejected as daemon codes).
-  Monotonic t-+ULID allocator, clock/entropy injected (pure). 3 named unit tests + 4 proptest properties (arbitrary sequences, terminal absorption, ID order/bijection).
-  3-OS CI green (run 41151157057). Unblocks T-004 (init) → T-005 (spawn). T-028 must map MT-004. gh CLI unauthenticated on host; CI read via public API.
