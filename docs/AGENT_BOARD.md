@@ -9,7 +9,7 @@ Anti-Bloat Constraints:
 
 ## Active Lock
 - Model: Claude Opus 5.5
-- Task: T-012
+- Task: T-013
 - Status: Doing
 
 ## Team Roster & Roles
@@ -23,6 +23,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-30 | Claude Opus 5.5: T-012 complete. Lease::expires_at + skew test (no premature expiry within relative skew ≤ grace). lease::coord codec: leases/<sha1>.json, log/<ULID>.json, canonical JSON, std-only SHA-1.
+  serde_json now a core dep. CI green (run 41154798925). Next: T-013.
 - 2026-10-30 | Claude Opus 5.5: T-011 complete. gitops: hash_object/mktree/commit_tree (fixed identity)/ls_tree/cat_blob/fetch_ref/push_ref_cas (--force-with-lease; lost race → RemoteCasRejected = MT-003).
   Two clones + bare file:// remote test green on all 3 OSes (run 41154570699). Next: T-012.
 - 2026-10-30 | Claude Opus 5.5: T-010 complete — M0 done. walking_skeleton_init_spawn_status_abort asserts task.json at each step; README Quickstart + §14 exit codes. CI green (run 41154334602). Next: T-011.
@@ -30,5 +32,3 @@ Anti-Bloat Constraints:
   ADR-0003 (needs human review): SPEC §7 heuristic misses a*/*b, so exact superset used. Exhaustive table vs brute force: 0 false negatives. CI green (run 41154122988).
 - 2026-10-30 | Claude Opus 5.5: T-008 complete. tests/lease_replay_props.rs: 256 random logs vs shuffled/duplicated/split-union copies → byte-identical lease table + MT-001 rejections; no cross-task conflicting leases.
   Extreme-TTL no-panic property. CI green (run 41153826336). Next: T-009.
-- 2026-10-30 | Claude Opus 5.5: T-007 complete. core::lease event model + (ts,counter,machine,id) key, holder-ts expiry (ttl+grace), replay() w/ id de-dup + MT-001 Rejections; overlap = caller predicate (T-009 plugs in).
-  core::time::Timestamp canonical RFC 3339 ms. 2 named tests. CI green (run 41153630251). Next: T-008.
