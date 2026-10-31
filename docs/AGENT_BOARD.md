@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5
-- Task: T-007
-- Status: Doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -23,6 +23,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-10-30 | Claude Opus 5.5: T-007 complete. core::lease event model + (ts,counter,machine,id) key, holder-ts expiry (ttl+grace), replay() w/ id de-dup + MT-001 Rejections; overlap = caller predicate (T-009 plugs in).
+  core::time::Timestamp canonical RFC 3339 ms. 2 named tests. CI green (run 41153630251). Next: T-008.
 - 2026-10-30 | Claude Opus 5.5: T-006 complete. status (text/--json; missing tasks/ = empty, malformed warned+skipped) + abort (active→abandoned, worktree removed, branch kept; else MT-004 exit 20). 5 tests. CI green (run 41153075068).
   Template fix: [machine] id commented out; spawn derives mc-<hostname> (env, then `hostname`). Backlog audit: added T-039 (§8 non-ff retry), T-040 (§12 ticket TTL), T-041 (§19 crates.io), T-042 (MCP listing) → 42 tasks.
   ADR candidates: §13 configurable cap, §17 queue override allow-list, §11 .venv recreate (no §6 keys). Next: T-007.
@@ -35,4 +37,3 @@ Anti-Bloat Constraints:
 - 2026-10-30 | Claude Opus 5.5: T-003 complete. meshtree-core::task: SPEC §8 machine (7 states, 9 edges), illegal → MT-004 (ADR-0002; MT-010/011 rejected as daemon codes).
   Monotonic t-+ULID allocator, clock/entropy injected (pure). 3 named unit tests + 4 proptest properties (arbitrary sequences, terminal absorption, ID order/bijection).
   3-OS CI green (run 41151157057). Unblocks T-004 (init) → T-005 (spawn). T-028 must map MT-004. gh CLI unauthenticated on host; CI read via public API.
-- 2026-10-30 | Gemini 3.8 High: T-002 complete. Config load/validation with MT-050 landed. 3-OS CI green.
