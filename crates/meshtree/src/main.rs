@@ -1,8 +1,10 @@
 mod abort;
+mod agents;
 mod claims;
 mod clock;
 mod daemon;
 mod exit;
+mod handoff;
 mod init;
 mod merge_gate;
 mod prune;
@@ -99,6 +101,29 @@ enum Command {
     },
     /// Flush local claim events and pull remote ones (refs/meshtree/coord)
     Sync,
+    /// Commit a handoff record on the task branch and regenerate AGENTS.md
+    ///
+    /// --set edits the record already on the branch: objective=/state= replace
+    /// the text; done/next/failing_tests/ruled_out/decisions are replaced by
+    /// the values given for that key, in order (an empty value clears the
+    /// list); a decision is decisions=<what>|<why>.
+    Handoff {
+        /// Task ID
+        task_id: String,
+        /// Complete handoff.json to commit ("-" reads stdin)
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with = "set",
+            required_unless_present = "set"
+        )]
+        json_file: Option<std::path::PathBuf>,
+        /// Edit one field (repeatable)
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        set: Vec<String>,
+    },
+    /// Regenerate the active-sessions block in the root AGENTS.md
+    RenderAgents,
 }
 
 #[derive(Debug, Subcommand)]
@@ -249,6 +274,31 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("{}", merge_gate::promote(&current_dir()?)?);
             Ok(())
         }
+        Some(Command::Handoff {
+            task_id,
+            json_file,
+            set,
+        }) => {
+            let input = match json_file {
+                Some(path) => handoff::Input::JsonFile(path),
+                None => handoff::Input::Set(set),
+            };
+            let report = handoff::run(&current_dir()?, &task_id, input)?;
+            match &report.commit {
+                Some(commit) => println!(
+                    "committed handoff for {} on {} ({commit})",
+                    report.task.id, report.task.branch
+                ),
+                None => println!("handoff for {} unchanged", report.task.id),
+            }
+            print_rendered(&report.agents);
+            Ok(())
+        }
+        Some(Command::RenderAgents) => {
+            let repo_root = repo::require_repo_root(&current_dir()?)?;
+            print_rendered(&agents::render(&repo_root)?);
+            Ok(())
+        }
         Some(Command::Sync) => {
             let (outcome, revoked, _) = claims::sync(&current_dir()?)?;
             println!("{}", claims::push_status(&outcome));
@@ -265,6 +315,23 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
     }
+}
+
+fn print_rendered(rendered: &agents::Rendered) {
+    for warning in &rendered.warnings {
+        eprintln!("meshtree: {warning}");
+    }
+    println!(
+        "{} {} ({} active session{})",
+        if rendered.changed {
+            "updated"
+        } else {
+            "unchanged"
+        },
+        rendered.path.display(),
+        rendered.sessions,
+        if rendered.sessions == 1 { "" } else { "s" }
+    );
 }
 
 fn print_claim_report(verb: &str, report: &claims::Report) {
