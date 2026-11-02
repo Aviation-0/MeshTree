@@ -90,11 +90,14 @@ fn events(
 }
 
 /// Acquires every path for `task`, or none (`MT-001` on any conflict).
+/// `ttl_secs` overrides `lease.ttl_secs` for these leases (§15
+/// `claim_paths`).
 pub fn acquire(
     repo_root: &Path,
     config: &Config,
     task: &TaskId,
     paths: &[String],
+    ttl_secs: Option<u64>,
 ) -> Result<SyncOutcome, CliError> {
     let machine = machine_id(config);
     let store = store(repo_root, config)?;
@@ -103,7 +106,7 @@ pub fn acquire(
         task,
         paths,
         &machine,
-        config.lease.ttl_secs,
+        ttl_secs.unwrap_or(config.lease.ttl_secs),
     );
     let outcome = store.sync(&batch).map_err(coord_error)?;
     let ids: BTreeSet<&str> = batch.iter().map(|e| e.id.as_str()).collect();
@@ -224,7 +227,7 @@ pub fn claim(cwd: &Path, raw_id: &str, globs: &[String]) -> Result<Report, CliEr
         return Report::from_json(&result?);
     }
     let config = load_config(&repo_root)?;
-    Ok(claim_in(&repo_root, &config, raw_id, globs)?.1)
+    Ok(claim_in(&repo_root, &config, raw_id, globs, None)?.1)
 }
 
 /// Claims `globs` for an active task and records them in `task.json`.
@@ -233,10 +236,11 @@ pub fn claim_in(
     config: &Config,
     raw_id: &str,
     globs: &[String],
+    ttl_secs: Option<u64>,
 ) -> Result<(Task, Report), CliError> {
     let paths = normalize_all(globs)?;
     let mut task = active_task(repo_root, raw_id)?;
-    let outcome = acquire(repo_root, config, &task.id, &paths)?;
+    let outcome = acquire(repo_root, config, &task.id, &paths, ttl_secs)?;
     for path in &paths {
         if !task.claims.contains(path) {
             task.claims.push(path.clone());

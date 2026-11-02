@@ -6,6 +6,7 @@ mod daemon;
 mod exit;
 mod handoff;
 mod init;
+mod mcp;
 mod merge_gate;
 mod prune;
 mod queue;
@@ -124,6 +125,8 @@ enum Command {
     },
     /// Regenerate the active-sessions block in the root AGENTS.md
     RenderAgents,
+    /// Serve the MCP tools on stdin/stdout (each call proxies to the daemon)
+    Mcp,
 }
 
 #[derive(Debug, Subcommand)]
@@ -294,6 +297,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             print_rendered(&report.agents);
             Ok(())
         }
+        Some(Command::Mcp) => mcp::run(&current_dir()?),
         Some(Command::RenderAgents) => {
             let repo_root = repo::require_repo_root(&current_dir()?)?;
             print_rendered(&agents::render(&repo_root)?);

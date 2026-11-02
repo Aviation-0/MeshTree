@@ -19,10 +19,14 @@
 //! `claim` and `release` reach the daemon through [`call`] when it is
 //! running; when no daemon is reachable the CLI performs the same operation
 //! in-process, arbitrated by the coordination-ref CAS (`T-014`).
+//!
+//! The methods are the §15 MCP tools (`meshtree mcp` proxies each one here),
+//! plus `ping`, `heartbeat`, `ticket_status`, `release_shared_op`,
+//! `queue_status` and `shutdown`.
 
 use crate::exit::{CliError, DAEMON, PLATFORM, TASK, USAGE};
 use crate::repo::{load_config, machine_id, require_repo_root};
-use crate::{claims, clock, merge_gate, registry};
+use crate::{abort, agents, claims, clock, handoff, merge_gate, registry, spawn};
 use meshtree_core::queue::{check_overrides, Holder, QueueTicket, SharedQueue, TICKET_ID_PREFIX};
 use meshtree_core::{Config, Task, TaskId, TaskIdAllocator, TaskStatus, Timestamp};
 use meshtree_platform::ipc::{
@@ -406,9 +410,15 @@ impl Daemon {
             "claim_paths" | "release_paths" => {
                 let raw_id = str_param(params, "task_id")?;
                 let paths = paths_param(params)?;
+                let ttl_secs = match params.get("ttl_secs") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_u64().filter(|&t| t > 0).ok_or_else(|| {
+                        CliError::new(USAGE, "'ttl_secs' must be a positive integer")
+                    })?),
+                };
                 let mut inner = self.lock();
                 let (task, report) = if method == "claim_paths" {
-                    claims::claim_in(&self.repo_root, &self.config, &raw_id, &paths)?
+                    claims::claim_in(&self.repo_root, &self.config, &raw_id, &paths, ttl_secs)?
                 } else {
                     claims::release_in(&self.repo_root, &self.config, &raw_id, &paths)?
                 };
@@ -447,6 +457,44 @@ impl Daemon {
                     &registry::list_tasks(&self.repo_root)?.tasks,
                 )),
             },
+            "list_tasks" => {
+                let active_only = params
+                    .get("active_only")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let tasks: Vec<Task> = registry::list_tasks(&self.repo_root)?
+                    .tasks
+                    .into_iter()
+                    .filter(|t| !active_only || is_live(t.status))
+                    .collect();
+                json_result(serde_json::to_value(&tasks))
+            }
+            "spawn_task" => self.spawn_task(params),
+            "abort_task" => self.abort_task(params),
+            "commit_handoff" => {
+                let raw_id = str_param(params, "task_id")?;
+                let mut fields = params.as_object().cloned().unwrap_or_default();
+                fields.remove("task_id");
+                let mut inner = self.lock();
+                let report =
+                    handoff::run(&self.repo_root, &raw_id, handoff::Input::Fields(fields))?;
+                inner.touch(&report.task.id);
+                let handoff_md = self
+                    .repo_root
+                    .join(&report.task.worktree)
+                    .join(agents::handoff_path(&report.task, "HANDOFF.md"));
+                Ok(json!({
+                    "task_id": report.task.id,
+                    "branch": report.task.branch,
+                    "commit": report.commit,
+                    "handoff_md": handoff_md,
+                    "agents_md": rendered_json(&report.agents),
+                }))
+            }
+            "render_agents_block" => {
+                let _inner = self.lock();
+                Ok(rendered_json(&agents::render(&self.repo_root)?))
+            }
             "sync" => {
                 let _inner = self.lock();
                 let (outcome, revoked) = claims::sync_in(&self.repo_root, &self.config)?;
@@ -502,6 +550,59 @@ impl Daemon {
             }
             other => Err(CliError::new(USAGE, format!("unknown method '{other}'"))),
         }
+    }
+
+    /// `spawn_task` (§8 `spawn`, §15), journaled like an adopted task.
+    fn spawn_task(&self, params: &Value) -> Result<Value, CliError> {
+        let args = spawn::SpawnArgs {
+            name: str_param(params, "name")?,
+            base: opt_str_param(params, "base")?,
+            agent: opt_str_param(params, "agent")?,
+            claims: match params.get("claims") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(a)) if a.is_empty() => Vec::new(),
+                Some(_) => strings_param(params, "claims")?,
+            },
+        };
+        let mut inner = self.lock();
+        let report = spawn::run(&self.repo_root, args)?;
+        let task = &report.task;
+        inner.ensure_journaled(task)?;
+        if !task.claims.is_empty() {
+            inner.journal(WalOp::Claim {
+                task: task.id.clone(),
+                paths: task.claims.clone(),
+            })?;
+        }
+        inner.touch(&task.id);
+        Ok(json!({
+            "task_id": task.id,
+            "worktree_path": report.worktree_path,
+            "branch": task.branch,
+            "claims": task.claims,
+            "shares": report.shares.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        }))
+    }
+
+    /// `abort_task` (§8 `abort`, §15): `active → abandoned`, journaled.
+    fn abort_task(&self, params: &Value) -> Result<Value, CliError> {
+        let id = task_id_param(params)?;
+        let mut inner = self.lock();
+        let before = registry::read_task(&self.repo_root, &id)?;
+        inner.ensure_journaled(&before)?;
+        let (task, note) = abort::run(&self.repo_root, id.as_str())?;
+        if !before.claims.is_empty() {
+            inner.journal(WalOp::Release {
+                task: task.id.clone(),
+                paths: before.claims.clone(),
+            })?;
+        }
+        inner.journal(WalOp::Transition {
+            task: task.id.clone(),
+            from: before.status,
+            to: task.status,
+        })?;
+        Ok(json!({ "task_id": task.id, "status": task.status, "note": note }))
     }
 
     /// `request_shared_op` (§12, §15): validates the queue, task and
@@ -740,6 +841,36 @@ impl merge_gate::Host for Daemon {
         self.merge
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Statuses listed as active sessions (`AGENTS.md`, `list_tasks
+/// active_only`): the task's worktree is still in play.
+fn is_live(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Active | TaskStatus::Collecting | TaskStatus::Merging
+    )
+}
+
+fn rendered_json(rendered: &agents::Rendered) -> Value {
+    json!({
+        "path": rendered.path,
+        "changed": rendered.changed,
+        "sessions": rendered.sessions,
+        "block": rendered.block,
+        "warnings": rendered.warnings,
+    })
+}
+
+fn opt_str_param(params: &Value, key: &str) -> Result<Option<String>, CliError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(CliError::new(
+            USAGE,
+            format!("parameter '{key}' must be a string"),
+        )),
     }
 }
 

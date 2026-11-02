@@ -20,6 +20,9 @@
 //! `decisions`) are replaced by the values given for them, in order
 //! (`--set next=a --set next=b`; an empty value clears the list); a decision
 //! is `decisions=<what>|<why>`. Unknown keys are usage errors.
+//!
+//! The MCP `commit_handoff` tool (§15) passes [`Input::Fields`]: the fields
+//! it names replace those of the record on the branch, the rest are kept.
 
 use crate::agents::{self, branch_handoff, handoff_path, Rendered};
 use crate::exit::{CliError, PLATFORM, TASK, USAGE};
@@ -50,6 +53,8 @@ pub enum Input {
     JsonFile(PathBuf),
     /// `key=value` edits of the record on the branch.
     Set(Vec<String>),
+    /// `handoff.json` fields replacing those of the record on the branch.
+    Fields(serde_json::Map<String, serde_json::Value>),
 }
 
 /// Result of `meshtree handoff`.
@@ -81,11 +86,15 @@ pub fn run(cwd: &Path, raw_id: &str, input: Input) -> Result<Report, CliError> {
     let git = CliGitOps::new(&repo_root);
     let record = match input {
         Input::JsonFile(path) => parse_json(&read_input(&path)?)?,
-        Input::Set(pairs) => {
-            let base = branch_handoff(&git, &task)
-                .map_err(|reason| CliError::new(TASK, format!("{id}: {reason}")))?
-                .unwrap_or_default();
-            apply_sets(base, &pairs)?
+        Input::Set(pairs) => apply_sets(branch_record(&git, &task)?, &pairs)?,
+        Input::Fields(fields) => {
+            let base = serde_json::to_value(branch_record(&git, &task)?)
+                .map_err(|err| CliError::new(PLATFORM, err.to_string()))?;
+            let serde_json::Value::Object(mut merged) = base else {
+                unreachable!("HandoffRecord serializes to an object")
+            };
+            merged.extend(fields);
+            parse_value(serde_json::Value::Object(merged))?
         }
     };
     let commit = commit_on_branch(&repo_root, &git, &task, &record)?;
@@ -95,6 +104,13 @@ pub fn run(cwd: &Path, raw_id: &str, input: Input) -> Result<Report, CliError> {
         commit,
         agents,
     })
+}
+
+/// The record at the tip of the task branch (default if none).
+fn branch_record(git: &CliGitOps, task: &Task) -> Result<HandoffRecord, CliError> {
+    branch_handoff(git, task)
+        .map(Option::unwrap_or_default)
+        .map_err(|reason| CliError::new(TASK, format!("{}: {reason}", task.id)))
 }
 
 fn read_input(path: &Path) -> Result<String, CliError> {
@@ -111,8 +127,14 @@ fn read_input(path: &Path) -> Result<String, CliError> {
 
 /// A complete record; unknown fields are rejected rather than dropped.
 fn parse_json(text: &str) -> Result<HandoffRecord, CliError> {
+    let value: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| CliError::new(USAGE, format!("handoff json: {e}")))?;
+    parse_value(value)
+}
+
+/// [`parse_json`] for an already-parsed value.
+fn parse_value(value: serde_json::Value) -> Result<HandoffRecord, CliError> {
     let usage = |msg: String| CliError::new(USAGE, format!("handoff json: {msg}"));
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| usage(e.to_string()))?;
     let object = value
         .as_object()
         .ok_or_else(|| usage("expected a JSON object".to_string()))?;

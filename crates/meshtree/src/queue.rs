@@ -75,7 +75,8 @@ pub fn request(cwd: &Path, queue: &str, task_id: &str, args: &[String]) -> Resul
     }
 }
 
-fn wait_for_grant(repo_root: &Path, id: &str) -> Result<(), CliError> {
+/// Polls ticket `id` until it is granted (also used by `meshtree mcp`).
+pub fn wait_for_grant(repo_root: &Path, id: &str) -> Result<(), CliError> {
     loop {
         let ticket = call(repo_root, "ticket_status", json!({ "ticket_id": id }))?;
         if ticket["granted"].as_bool() == Some(true) {

@@ -79,7 +79,7 @@ pub fn run(cwd: &Path, args: SpawnArgs) -> Result<SpawnReport, CliError> {
     registry::write_task(&repo_root, &task)?;
 
     if !claim_paths.is_empty() {
-        if let Err(err) = claims::acquire(&repo_root, &config, &task.id, &claim_paths) {
+        if let Err(err) = claims::acquire(&repo_root, &config, &task.id, &claim_paths, None) {
             transition(&mut task, TaskStatus::Failed)?;
             registry::write_task(&repo_root, &task)?;
             return Err(CliError::new(

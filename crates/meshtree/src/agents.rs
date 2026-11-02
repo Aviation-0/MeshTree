@@ -32,6 +32,8 @@ pub struct Rendered {
     pub changed: bool,
     /// Sessions listed in the block.
     pub sessions: usize,
+    /// The rendered block (LF line endings).
+    pub block: String,
     /// Skipped registry records and unreadable handoffs.
     pub warnings: Vec<String>,
 }
@@ -106,6 +108,7 @@ pub fn render(repo_root: &Path) -> Result<Rendered, CliError> {
         path,
         changed,
         sessions: sessions.len(),
+        block,
         warnings,
     })
 }
