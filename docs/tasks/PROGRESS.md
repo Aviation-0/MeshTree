@@ -5,12 +5,13 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate` (Week 3 · Target: `2026-11-22`)
-- **In-Progress Task (`doing`):** `T-032` — junction/realpath compatibility probe + appendix (Claude Opus 5.5, Windows)
+- **In-Progress Task (`doing`):** None
 - **Next Up (`todo`, dependencies satisfied):**
   1. `T-039` — Integration-branch remote sync (non-ff retry ×5) (`crates/meshtree`)
   2. `T-040` — Queue ticket TTL expiry (`crates/meshtree-core` + daemon)
   3. `T-043` — Coord-ref task registry (`crates/meshtree` + `platform::coord`)
-- **Latest (2026-11-02, Claude Opus 5.5, Windows):** `T-028` done (30/46) — `meshtree mcp` stateless stdio MCP proxy for all 11 §15 tools (`[MT-xxx]` tool errors, `MT-010` without a daemon, clean exit on client EOF leaving the daemon running); daemon gained `spawn_task` / `abort_task` / `list_tasks` / `commit_handoff` / `render_agents_block`, `claim_paths` takes `ttl_secs`; CI run 41540486618 green on all 3 OSes.
+- **Latest (2026-11-02, Claude Opus 5.5, Windows):** `T-032` done (31/46) — junction/symlink/clonefile realpath probe matrix (`share_junction_realpath_probe_matrix`) and `docs/compatibility.md` with per-tool `strategy = "none"` recipes; Windows resolves `<junction>/..` lexically, POSIX physically; CI run 41548903359 green on all 3 OSes.
+- **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-028` done (30/46) — `meshtree mcp` stateless stdio MCP proxy for all 11 §15 tools (`[MT-xxx]` tool errors, `MT-010` without a daemon, clean exit on client EOF leaving the daemon running); daemon gained `spawn_task` / `abort_task` / `list_tasks` / `commit_handoff` / `render_agents_block`, `claim_paths` takes `ttl_secs`; CI run 41540486618 green on all 3 OSes.
 - **Earlier (2026-11-02, Claude Opus 5.5, Mac):** `T-027` done (29/46) — `meshtree handoff` (`--json-file` / `--set`) commits `handoff.json` + `HANDOFF.md` on the task branch via plumbing + worktree fast-forward (agent's uncommitted work kept), and `meshtree render-agents` regenerates the root `AGENTS.md` block; CI run 41509759232 green on all 3 OSes.
 - **Earlier (2026-10-31, Claude Opus 5.5, Windows):** `T-026` done (28/46) — pure handoff model + `HANDOFF.md` / `AGENTS.md` block renderers and splice (byte-stable snapshots, marker-forgery defused); CI run 41231429375 green on all 3 OSes.
 - **Earlier (2026-10-31, Claude Opus 5.5, Windows):** `T-046` done (27/46) — Unix daemon socket falls back to `/tmp/meshtree-<uid>/<repo-hash-16>.sock` (owner/mode/symlink-checked `0700` directory) when `.meshtree/daemon.sock` exceeds the socket path limit (`ADR-0007`); CI run 41230869170 green on all 3 OSes.
@@ -32,10 +33,10 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 4 | 0 | 0 | 0 | `done` |
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 9 | 0 | 0 | 3 | `doing` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 7 | 0 | 0 | 2 | `doing` |
-| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033` | 4 | 0 | 1 | 0 | 3 | `doing` |
+| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033` | 4 | 1 | 0 | 0 | 3 | `doing` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042` | 5 | 0 | 0 | 0 | 5 | `todo` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **30** | **1** | **0** | **15** | **65% (`30 / 46`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **31** | **0** | **0** | **15** | **67% (`31 / 46`)** |
 
 ---
 
