@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: None (Idle)
-- Task: None
-- Status: Idle
+- Model: Claude Opus 5.5 (Windows)
+- Task: T-039 (integration-branch remote sync, non-ff retry x5)
+- Status: doing
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
