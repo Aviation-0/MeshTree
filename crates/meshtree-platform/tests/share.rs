@@ -15,8 +15,30 @@ struct TempDir(PathBuf);
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// On GitHub Actions, also prints each test panic as an `::error::`
+/// annotation (readable through the public API, unlike job logs).
+fn annotate_panics_in_ci() {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        if std::env::var_os("GITHUB_ACTIONS").is_none() {
+            return;
+        }
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let text = info
+                .to_string()
+                .replace('%', "%25")
+                .replace('\r', "")
+                .replace('\n', "%0A");
+            println!("::error title=share test panic::{text}");
+            previous(info);
+        }));
+    });
+}
+
 impl TempDir {
     fn new() -> Self {
+        annotate_panics_in_ci();
         let path = std::env::temp_dir().join(format!(
             "mt-share-{}-{}",
             std::process::id(),
@@ -294,6 +316,9 @@ fn share_junction_realpath_probe_matrix() {
     }
     let _ = unlink(&primary.join("node_modules/pnpm-pkg"));
     println!("{}", matrix.join("\n"));
+    if std::env::var_os("GITHUB_ACTIONS").is_some() {
+        println!("::notice title=share probe matrix::{}", matrix.join("%0A"));
+    }
 
     // `strategy = "none"` is the escape hatch: nothing to resolve through.
     let worktree = tmp.path().join("wt-none");
