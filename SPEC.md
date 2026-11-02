@@ -316,6 +316,7 @@ sequenceDiagram
 
 - **Same machine:** the daemon is the single arbiter; claims are checked synchronously in every `spawn`/`collect`/`claim` call.
 - **Across machines:** claims are advisory. A losing machine may keep editing in its isolated worktree — it cannot corrupt anything — but its `collect` is rejected at the merge gate if its diff intersects another active claim. MeshTree converts cross-machine races from *silent data loss* into *an explicit, reported merge-time conflict*.
+- **Cloud and ephemeral agents (ADR-0008):** a cloud-hosted session (e.g. an ephemeral sandbox cloning from the remote) is a remote machine like any other. The protocol layer (§8, §9, §13) applies unchanged; the local-resource layers (§10 teardown, §11 sharing, §12 queue) are per-machine and have no work for it. Hard enforcement stays local-daemon-only; every remote participant, managed or not, is advisory with merge-gate protection — an unmanaged agent holds no claims, so its work is claim-checked only if it enters through a collected task branch (`MT-032`), and direct pushes to the base branch get git's own conflict detection (`MT-031`). A machine that vanishes mid-task is a stale lease, reaped by holder-timestamp TTL + `skew_grace_secs` and any machine's `EXPIRE_SWEEP` (this section); a restored sandbox is handled by `daemon.lock` stale detection (§10, `MT-011`). No cloud service is involved (§3).
 
 ---
 
