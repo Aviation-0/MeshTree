@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Mac)
-- Task: T-027
-- Status: doing (2026-11-02)
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-02 | Claude Opus 5.5 (Mac): T-027 done (29/46). meshtree handoff (--json-file/--set) commits handoff.json+HANDOFF.md on task branch via plumbing + worktree ff-only (agent WIP kept); render-agents rewrites AGENTS.md block on change.
+  CI green (run 41509759232). Open: §6 cap key; OS machine-id unowned. Next: T-028.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-026 done (28/46). core::handoff: HandoffRecord, HANDOFF.md + AGENTS.md block renderers (id order, 10-line cap, marker forgery defused), idempotent CRLF-preserving splice.
   CI green (run 41231429375). Open: no §6 key for the 10-line cap. Next: T-027.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-046 done (27/46). Unix socket falls back to /tmp/meshtree-<uid>/<hash16>.sock past the path limit; dir must be our own real 0700 dir (bind+connect).
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   Totals 26/46. Next: T-026.
 - 2026-10-31 | Claude Opus 5.5 (Windows): ADR review — ADR-0003/0005/0006 Accepted by Lucas Pan; SPEC §10 step 3 amended (ADR-0006).
   ADR-0007 Proposed: /tmp/meshtree-<uid>/<hash16>.sock fallback for long Unix socket paths (needs acceptance + task T-046). Next: T-026.
-- 2026-10-31 | Claude Opus 5.5 (Windows): T-025 done (26/45), session end. Exclusive-handle (dwShareMode=0) collect + abort never fail; prune reclaims after release. ADR-0006 (Proposed): Windows blocks moving a dir with an exclusively open file → defer (MT-020).
-  CI green (run 41228444158). Open: ADR-0006/0005/0003 acceptance, macOS SUN_LEN. Next: T-026.
