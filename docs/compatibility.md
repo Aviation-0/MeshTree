@@ -11,12 +11,12 @@ The named test `share_junction_realpath_probe_matrix` (`crates/meshtree-platform
 | `lstat` reports a link | yes | yes | no (real directory) | no directory |
 | `readlink` names the primary's directory | yes | yes | — | — |
 | `realpath` of a package file lands in the **primary** worktree | **yes** | **yes** | no (stays in the task worktree) | — |
-| `<link>/..` physically resolves to the **primary** worktree root | **yes** | **yes** | no | — |
+| `<link>/..` resolves to the **primary** worktree root | no: Windows normalizes `..` lexically, so it is the task worktree | **yes** (POSIX follows the link first) | no | — |
 | A write through the link appears in the primary (shared state) | **yes** | **yes** | no (copy-on-write) | — |
 | A nested pnpm link inside the shared tree resolves | yes | yes | yes | — |
 | Removing a worktree deletes only the link, never the primary's files | yes (`T-022`/`T-024` tests) | yes | n/a (independent copy) | n/a |
 
-The rows in bold are the source of every incompatibility below: a tool that follows links sees the dependency at the primary worktree's path, outside the task worktree's project root, and every task shares one mutable copy.
+The rows in bold are the source of every incompatibility below: a tool that follows links sees the dependency at the primary worktree's path, outside the task worktree's project root, and every task shares one mutable copy. The `..` row differs by OS: a path such as `node_modules/../src` names the task worktree's `src` on Windows but the primary worktree's `src` on macOS and Linux, so tools that build paths by walking up from inside `node_modules` see different trees per OS.
 
 ## What is not verified here
 

@@ -278,7 +278,10 @@ fn share_junction_realpath_probe_matrix() {
         is_link: true,
         read_link_to_primary: true,
         realpath_in_primary: true,
-        dotdot_is_primary: true,
+        // Windows normalizes `..` lexically before following the junction,
+        // so `<link>/..` is the task worktree there; POSIX resolves the
+        // link first, so it is the primary worktree.
+        dotdot_is_primary: !cfg!(windows),
         writes_shared: true,
         nested_link_resolves: true,
     };
