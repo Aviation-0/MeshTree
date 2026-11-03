@@ -273,3 +273,57 @@ fn queue_slot_ttl_lapse_releases_live_holder() {
     assert_eq!(released["released"], true);
     daemon.stop(root);
 }
+
+#[test]
+fn queue_ticket_ttl_secs_overrides_lease_ttl() {
+    // `test` lapses after its own 2 s ticket TTL; `hold` has no key and keeps
+    // the 900 s lease TTL (`ADR-0011`).
+    let repo = repo_with_queues();
+    let root = repo.path();
+    fs::write(
+        root.join(".meshtree/config.toml"),
+        CONFIG.replace(
+            "[queue.test]\nconcurrency = 1\n",
+            "[queue.test]\nconcurrency = 1\nticket_ttl_secs = 2\n",
+        ),
+    )
+    .unwrap();
+    let task = spawn_task(root, "ticket-ttl");
+    let daemon = DaemonProc::start(root);
+
+    let test_first = request(root, &task, "test");
+    let hold_first = request(root, &task, "hold");
+    let granted = Instant::now();
+    assert_eq!(test_first["granted"], true, "{test_first}");
+    assert_eq!(hold_first["granted"], true, "{hold_first}");
+    let test_second = request(root, &task, "test");
+    let hold_second = request(root, &task, "hold");
+    assert_eq!(test_second["granted"], false, "{test_second}");
+    assert_eq!(hold_second["granted"], false, "{hold_second}");
+    let test_id = test_second["id"].as_str().unwrap().to_string();
+    let hold_id = hold_second["id"].as_str().unwrap().to_string();
+
+    wait_until("ticket TTL grant", || {
+        ok(root, "ticket_status", json!({ "ticket_id": test_id }))["granted"] == true
+    });
+    let waited = granted.elapsed();
+    assert!(
+        waited >= Duration::from_millis(1_900),
+        "granted after {waited:?}, before the 2 s ticket TTL"
+    );
+
+    // Well past 2 s, the `hold` slot (lease TTL, 900 s) is still held.
+    std::thread::sleep(Duration::from_millis(1_000));
+    let hold = ok(root, "ticket_status", json!({ "ticket_id": hold_id }));
+    assert_eq!(hold["granted"], false, "{hold}");
+    let first = hold_first["id"].as_str().unwrap();
+    assert_eq!(
+        ok(root, "ticket_status", json!({ "ticket_id": first }))["granted"],
+        true
+    );
+
+    for id in [first, hold_id.as_str(), test_id.as_str()] {
+        ok(root, "release_shared_op", json!({ "ticket_id": id }));
+    }
+    daemon.stop(root);
+}

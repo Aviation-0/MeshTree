@@ -144,7 +144,15 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         .map_err(|err| CliError::new(PLATFORM, format!("IPC endpoint: {err}")))?;
 
     let started_ms = clock::now_unix_ms();
-    let ticket_ttl_ms = config.lease.ttl_secs.saturating_mul(1000);
+    let default_ticket_ttl_ms = config.lease.ttl_secs.saturating_mul(1000);
+    let ticket_ttl_ms: BTreeMap<String, u64> = config
+        .queue
+        .iter()
+        .map(|(name, q)| {
+            let secs = q.ticket_ttl_secs_or(config.lease.ttl_secs);
+            (name.clone(), secs.saturating_mul(1000))
+        })
+        .collect();
     let flush_delay = std::env::var(FLUSH_DELAY_ENV)
         .ok()
         .and_then(|v| v.parse().ok())
@@ -167,6 +175,7 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
             ids: TaskIdAllocator::new(),
             boot: boot_id().ok(),
             ttl_ms: ticket_ttl_ms,
+            default_ttl_ms: default_ticket_ttl_ms,
         }),
         dirty: AtomicBool::new(false),
         shutdown: AtomicBool::new(false),
@@ -385,9 +394,13 @@ struct Queues {
     /// This boot, for holder liveness (`None` if it could not be read: then
     /// only the pid is checked).
     boot: Option<String>,
-    /// Ticket TTL (§12): a granted slot lapses this long after its grant
-    /// even if the holder is alive. `lease.ttl_secs`; §6 has no queue key.
-    ttl_ms: u64,
+    /// Ticket TTL per configured queue (§12): a granted slot lapses this
+    /// long after its grant even if the holder is alive.
+    /// `[queue.<name>] ticket_ttl_secs`, else `lease.ttl_secs` (`ADR-0011`).
+    ttl_ms: BTreeMap<String, u64>,
+    /// Ticket TTL of queues without a `[queue.<name>]` table (`validate`):
+    /// `lease.ttl_secs`.
+    default_ttl_ms: u64,
 }
 
 impl Queues {
@@ -407,12 +420,17 @@ impl Queues {
                     ticket.holder.pid
                 );
             }
-            for ticket in queue.expire(self.ttl_ms, now) {
+            let ttl_ms = self
+                .ttl_ms
+                .get(&queue.name)
+                .copied()
+                .unwrap_or(self.default_ttl_ms);
+            for ticket in queue.expire(ttl_ms, now) {
                 note!(
                     "queue {}: {} released (slot TTL of {} s lapsed; holder pid {})",
                     queue.name,
                     ticket.id,
-                    self.ttl_ms / 1000,
+                    ttl_ms / 1000,
                     ticket.holder.pid
                 );
             }

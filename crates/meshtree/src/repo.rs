@@ -49,15 +49,26 @@ pub fn load_config(repo_root: &Path) -> Result<Config, CliError> {
         .map_err(|err| CliError::new(USAGE, format!("{err} ({})", path.display())))
 }
 
-/// Machine identifier: `[machine].id` from config, else `mc-<hostname>`.
-/// Full OS machine-id derivation belongs to the platform layer (`T-016`).
+/// Machine identifier (`SPEC.md` §6, `ADR-0011`): `[machine].id` from
+/// config, else `mc-` + 16 hex of SHA-1 over the OS machine identifier, else
+/// `mc-<hostname>` with a one-time note.
 pub fn machine_id(config: &Config) -> String {
     if let Some(id) = config.machine.as_ref().and_then(|m| m.id.clone()) {
         return id;
     }
-    hostname()
+    if let Some(id) = meshtree_platform::machine::derived_machine_id() {
+        return id;
+    }
+    let id = hostname()
         .map(|host| format!("mc-{host}"))
-        .unwrap_or_else(|| "mc-local".to_string())
+        .unwrap_or_else(|| "mc-local".to_string());
+    static NOTE: std::sync::Once = std::sync::Once::new();
+    NOTE.call_once(|| {
+        eprintln!(
+            "note: OS machine id unreadable; using {id} (set [machine] id in .meshtree/config.toml)"
+        )
+    });
+    id
 }
 
 /// Host name, lowercased with characters outside `[a-z0-9-]` mapped to `-`.

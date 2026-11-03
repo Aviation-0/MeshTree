@@ -66,9 +66,14 @@ fn spawn_creates_worktree_branch_and_task_json() {
     assert_eq!(task.base, "main");
     assert_eq!(task.status, TaskStatus::Active);
     assert!(task.claims.is_empty());
-    // The template sets no [machine] id, so it is derived from the host.
-    assert!(task.machine.starts_with("mc-"), "machine: {}", task.machine);
-    assert!(task.machine.len() > "mc-".len());
+    // The template sets no [machine] id, so it is derived from the OS
+    // machine id (ADR-0011; every CI OS has one).
+    assert_eq!(
+        Some(task.machine.clone()),
+        meshtree_platform::machine::derived_machine_id(),
+        "machine: {}",
+        task.machine
+    );
     assert_eq!(task.created_at.len(), "2026-11-03T14:02:11Z".len());
     assert!(task.created_at.ends_with('Z'));
     assert!(!repo

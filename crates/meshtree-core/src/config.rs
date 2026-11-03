@@ -67,6 +67,10 @@ pub struct Config {
     #[serde(default)]
     pub queue: BTreeMap<String, QueueConfig>,
 
+    /// Generated `AGENTS.md` block settings (`SPEC.md` §13, `ADR-0011`).
+    #[serde(default)]
+    pub agents: AgentsConfig,
+
     /// Machine identity configuration (optional).
     #[serde(default)]
     pub machine: Option<MachineConfig>,
@@ -110,13 +114,17 @@ strategy = "none"                  # cargo target stays per-worktree; queue seri
 [queue.test]
 concurrency = 1                    # serialized shared operations
 command = "npm test"
+# ticket_ttl_secs = 900            # optional; max slot hold after grant (default lease.ttl_secs)
 
 [queue.build]
 concurrency = 1
 command = "npm run build"
 
-[machine]                          # optional; auto-derived from OS machine-id if absent
-# id = "custom-id" # Optional: defaults to system hostname if omitted
+[agents]
+max_lines = 10                     # cap for the generated AGENTS.md block
+
+[machine]                          # optional; if absent: "mc-" + 16 hex of sha1(OS machine-id),
+# id = "custom-id"                 # else "mc-<hostname>"
 "#
     }
 
@@ -130,6 +138,7 @@ command = "npm run build"
         for (name, queue) in &self.queue {
             queue.validate(name)?;
         }
+        self.agents.validate()?;
         if let Some(ref machine) = self.machine {
             machine.validate()?;
         }
@@ -360,6 +369,11 @@ pub struct QueueConfig {
     /// Empty (the default) accepts no overrides.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_args: Vec<String>,
+
+    /// How long a granted slot may be held before it lapses, even if the
+    /// holder is alive (`SPEC.md` §12, `ADR-0011`). Absent: `lease.ttl_secs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket_ttl_secs: Option<u64>,
 }
 
 impl QueueConfig {
@@ -384,6 +398,51 @@ impl QueueConfig {
                     "queue.{name}.allow_args entries must be non-empty without whitespace, got '{arg}'"
                 )));
             }
+        }
+        if self.ticket_ttl_secs == Some(0) {
+            return Err(ConfigError::new(format!(
+                "queue.{name}.ticket_ttl_secs must be greater than 0, got 0"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Slot TTL in seconds: `ticket_ttl_secs`, else the lease TTL.
+    pub fn ticket_ttl_secs_or(&self, lease_ttl_secs: u64) -> u64 {
+        self.ticket_ttl_secs.unwrap_or(lease_ttl_secs)
+    }
+}
+
+/// Default cap for the generated `AGENTS.md` block (`SPEC.md` §13).
+pub const DEFAULT_AGENTS_MAX_LINES: usize = 10;
+
+/// Generated `AGENTS.md` block settings (`[agents]` table, `ADR-0011`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentsConfig {
+    /// Maximum lines of the active-sessions list (must be >= 1).
+    #[serde(default = "default_agents_max_lines")]
+    pub max_lines: usize,
+}
+
+fn default_agents_max_lines() -> usize {
+    DEFAULT_AGENTS_MAX_LINES
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            max_lines: DEFAULT_AGENTS_MAX_LINES,
+        }
+    }
+}
+
+impl AgentsConfig {
+    /// Validates `[agents]` fields.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_lines == 0 {
+            return Err(ConfigError::new(
+                "agents.max_lines must be greater than 0, got 0",
+            ));
         }
         Ok(())
     }
@@ -594,6 +653,44 @@ id = ""
         assert_eq!(config.share.len(), 2);
         // No machine id is baked into the template: each machine derives its own.
         assert_eq!(config.machine.and_then(|m| m.id), None);
+    }
+
+    #[test]
+    fn config_agents_max_lines_and_queue_ticket_ttl() {
+        // Defaults: cap 10, slot TTL = lease TTL.
+        let base = "[project]\nbase_branch = \"main\"\n\n[queue.test]\nconcurrency = 1\ncommand = \"npm test\"\n";
+        let config = Config::from_toml_str(base).expect("defaults parse");
+        assert_eq!(config.agents.max_lines, DEFAULT_AGENTS_MAX_LINES);
+        assert_eq!(config.queue["test"].ticket_ttl_secs, None);
+        assert_eq!(
+            config.queue["test"].ticket_ttl_secs_or(config.lease.ttl_secs),
+            900
+        );
+
+        // Explicit values (the SPEC §6 example keys).
+        let set = format!("{base}ticket_ttl_secs = 120\n\n[agents]\nmax_lines = 4\n");
+        let config = Config::from_toml_str(&set).expect("explicit values parse");
+        assert_eq!(config.agents.max_lines, 4);
+        assert_eq!(config.queue["test"].ticket_ttl_secs_or(900), 120);
+        let back = Config::from_toml_str(&config.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back, config);
+
+        // Invalid values are MT-050.
+        for bad in [
+            format!("{base}ticket_ttl_secs = 0\n"),
+            format!("{base}ticket_ttl_secs = -5\n"),
+            format!("{base}ticket_ttl_secs = \"soon\"\n"),
+            format!("{base}\n[agents]\nmax_lines = 0\n"),
+            format!("{base}\n[agents]\nmax_lines = -1\n"),
+            format!("{base}\n[agents]\nmax_lines = \"ten\"\n"),
+        ] {
+            let err = Config::from_toml_str(&bad).expect_err(&bad);
+            assert_eq!(err.code(), ERROR_CODE_CONFIG_INVALID, "{bad}");
+        }
+
+        // The shipped template sets both keys' documented defaults.
+        let template = Config::from_toml_str(Config::template()).unwrap();
+        assert_eq!(template.agents.max_lines, 10);
     }
 
     #[test]

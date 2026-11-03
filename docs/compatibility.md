@@ -58,6 +58,7 @@ strategy = "auto"   # auto | junction | symlink | clonefile | none
 
 - `SPEC.md` §11: **never shared**. A virtual environment records absolute paths (`pyvenv.cfg` `home`, console-script shebangs, `.pth` entries); a linked `.venv` runs the primary worktree's code, not the task's, for editable installs.
 - **Recipe.** Leave `.venv` out of `[[share]]` (or `strategy = "none"`) and recreate it per worktree from the lockfile (`uv sync`, `poetry install`, `python -m venv .venv && pip install -r requirements.txt`). `uv`'s and pip's download caches are already shared per user.
+- **MeshTree never shares or recreates `.venv`** (`ADR-0011`). `strategy = "none"` is the only `.venv` behaviour, and no MeshTree step runs a recreate command. §11's "recreated from lock" means by the project's own tooling: a `validate` command (e.g. `validate = ["uv sync --frozen", "pytest"]`), or the agent itself after `spawn`, using the recipe above.
 
 ### Vite / esbuild
 

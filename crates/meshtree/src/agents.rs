@@ -4,17 +4,13 @@
 //! Every live task (`active`, `collecting`, `merging`) is listed with the
 //! handoff committed on its task branch; tasks without one are listed as
 //! `active.`. The block is rendered and spliced by `meshtree-core::handoff`
-//! (deterministic, task-id order, capped at
-//! [`DEFAULT_LINE_CAP`](meshtree_core::handoff::DEFAULT_LINE_CAP) lines; `SPEC`
-//! §6 has no key for the cap yet). The file is rewritten only when its bytes
-//! change.
+//! (deterministic, task-id order, capped at `[agents] max_lines` lines,
+//! default 10; `ADR-0011`). The file is rewritten only when its bytes change.
 
 use crate::exit::{CliError, PLATFORM};
 use crate::registry;
-use crate::repo::platform_error;
-use meshtree_core::handoff::{
-    render_agents_block, splice_agents_md, ActiveSession, HandoffRecord, DEFAULT_LINE_CAP,
-};
+use crate::repo::{load_config, platform_error};
+use meshtree_core::handoff::{render_agents_block, splice_agents_md, ActiveSession, HandoffRecord};
 use meshtree_core::{Task, TaskStatus};
 use meshtree_platform::gitops::{CliGitOps, GitOps};
 use std::fs;
@@ -62,6 +58,7 @@ pub fn branch_handoff(git: &CliGitOps, task: &Task) -> Result<Option<HandoffReco
 
 /// Re-renders the active-sessions block into `<repo_root>/AGENTS.md`.
 pub fn render(repo_root: &Path) -> Result<Rendered, CliError> {
+    let max_lines = load_config(repo_root)?.agents.max_lines;
     let listing = registry::list_tasks(repo_root)?;
     let mut warnings: Vec<String> = listing
         .malformed
@@ -87,7 +84,7 @@ pub fn render(repo_root: &Path) -> Result<Rendered, CliError> {
         })
         .collect();
 
-    let block = render_agents_block(&sessions, DEFAULT_LINE_CAP);
+    let block = render_agents_block(&sessions, max_lines);
     let path = repo_root.join(AGENTS_MD);
     let current = match fs::read_to_string(&path) {
         Ok(text) => text,

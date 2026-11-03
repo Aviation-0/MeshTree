@@ -14,8 +14,8 @@ pub mod task;
 pub mod time;
 
 pub use config::{
-    Config, ConfigError, LeaseConfig, MachineConfig, ProjectConfig, QueueConfig, ShareConfig,
-    ShareStrategy, ERROR_CODE_CONFIG_INVALID,
+    AgentsConfig, Config, ConfigError, LeaseConfig, MachineConfig, ProjectConfig, QueueConfig,
+    ShareConfig, ShareStrategy, ERROR_CODE_CONFIG_INVALID,
 };
 pub use lease::{
     replay, EventType, Lease, LeaseEvent, LeaseTable, Rejection, Replay, ReplayConfig,

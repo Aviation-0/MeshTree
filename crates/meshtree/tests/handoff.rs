@@ -373,3 +373,51 @@ fn render_agents_creates_agents_md_and_preserves_crlf() {
     let out = meshtree(root, &["render-agents"]);
     assert!(stdout(&out).starts_with("unchanged"), "{}", stdout(&out));
 }
+
+#[test]
+fn render_agents_respects_max_lines() {
+    let repo = TempDir::repo_with_commit();
+    let root = repo.path();
+    assert_exit(&meshtree(root, &["init"]), 0);
+    let tasks: Vec<Task> = (0..5)
+        .map(|i| spawn(root, &[&format!("cap-{i}")]))
+        .collect();
+    let config_path = root.join(".meshtree/config.toml");
+    let template = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(template.matches("max_lines = 10").count(), 1, "{template}");
+    let set_cap = |cap: &str| {
+        let text = template.replace("max_lines = 10", &format!("max_lines = {cap}"));
+        fs::write(&config_path, text).unwrap();
+    };
+    let entries = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|l| l.starts_with("- "))
+            .map(str::to_string)
+            .collect()
+    };
+
+    // Cap 3: two whole entries and a summary line.
+    set_cap("3");
+    assert_exit(&meshtree(root, &["render-agents"]), 0);
+    let lines = entries(&agents_md(root));
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[0].contains(&tasks[0].id.to_string()), "{lines:?}");
+    assert!(lines[2].contains("and 3 more active sessions"), "{lines:?}");
+
+    // The default cap of 10 lists all five.
+    set_cap("10");
+    assert_exit(&meshtree(root, &["render-agents"]), 0);
+    let lines = entries(&agents_md(root));
+    assert_eq!(lines.len(), 5, "{lines:?}");
+    for task in &tasks {
+        assert!(lines.iter().any(|l| l.contains(&task.id.to_string())));
+    }
+
+    // An invalid cap is a config error (MT-050, usage exit) and leaves the file alone.
+    let before = agents_md(root);
+    set_cap("0");
+    let out = meshtree(root, &["render-agents"]);
+    assert_exit(&out, 10);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("MT-050"));
+    assert_eq!(agents_md(root), before);
+}
