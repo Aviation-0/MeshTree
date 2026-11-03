@@ -31,3 +31,18 @@ jobs:
         run: cargo build --workspace
       - name: Run tests
         run: cargo test --workspace
+
+  coverage:
+    name: Coverage (meshtree-core >= 85% lines)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Enforce meshtree-core line coverage (SPEC §18, §22)
+        run: cargo llvm-cov -p meshtree-core --summary-only --fail-under-lines 85
