@@ -16,6 +16,11 @@
 //! On startup, before binding, [`recovery`] replays the WAL against the task
 //! registry and settles collects a crash interrupted (§10 Crash safety).
 //!
+//! Every status change the daemon makes (the `collect` edges, recovery, the
+//! sweeper) is also published to the coordination-ref task registry
+//! (`tasks/<id>.json`, `T-047`), best-effort like `spawn` and `abort`;
+//! recovery's publishes wait until the endpoint is serving.
+//!
 //! `claim` and `release` reach the daemon through [`call`] when it is
 //! running; when no daemon is reachable the CLI performs the same operation
 //! in-process, arbitrated by the coordination-ref CAS (`T-014`).
@@ -124,6 +129,8 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         }),
         dirty: AtomicBool::new(false),
         shutdown: AtomicBool::new(false),
+        recovering: AtomicBool::new(true),
+        unpublished: Mutex::new(Vec::new()),
     });
 
     // Recover before accepting clients (§10 Crash safety).
@@ -158,6 +165,7 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         std::process::id(),
         endpoint.path().display()
     );
+    daemon.publish_recovered();
 
     let mut last_beat = started_ms;
     let mut last_flush = started_ms;
@@ -300,6 +308,10 @@ struct Daemon {
     /// A coordination push was deferred and should be retried.
     dirty: AtomicBool,
     shutdown: AtomicBool,
+    /// Startup recovery is running: registry publishes wait in
+    /// `unpublished` so pushes cannot delay recovery (§10: < 2 s).
+    recovering: AtomicBool,
+    unpublished: Mutex<Vec<Task>>,
 }
 
 /// Local FIFO queues, created on first use from `[queue.<name>]`.
@@ -761,7 +773,45 @@ impl Daemon {
             to: TaskStatus::Abandoned,
         })?;
         note!("{} abandoned (no activity for ttl_secs x 4)", task.id);
+        self.publish(&task);
         Ok(())
+    }
+
+    /// Publishes `task` to the coordination-ref task registry (§5, §8,
+    /// `T-047`), best-effort: a failure is logged and never fails the
+    /// transition; a deferred push is retried by the flush loop. Callers
+    /// hold the operation mutex, so registry writes are serialized with
+    /// claims.
+    fn publish(&self, task: &Task) {
+        if self.recovering.load(Ordering::SeqCst) {
+            self.unpublished
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(task.clone());
+            return;
+        }
+        if let Some(note) = claims::publish_task(&self.repo_root, &self.config, task) {
+            note!("{}: {note}", task.id);
+            self.dirty.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Ends recovery and publishes the transitions it made.
+    fn publish_recovered(&self) {
+        self.recovering.store(false, Ordering::SeqCst);
+        let tasks = std::mem::take(
+            &mut *self
+                .unpublished
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        if tasks.is_empty() {
+            return;
+        }
+        let _inner = self.lock();
+        for task in &tasks {
+            self.publish(task);
+        }
     }
 
     /// Retries a deferred coordination push.
@@ -798,6 +848,7 @@ impl merge_gate::Host for Daemon {
             to,
         })?;
         inner.touch(&task.id);
+        self.publish(task);
         Ok(())
     }
 
