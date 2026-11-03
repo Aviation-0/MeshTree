@@ -104,6 +104,7 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         .map_err(|err| CliError::new(PLATFORM, format!("IPC endpoint: {err}")))?;
 
     let started_ms = clock::now_unix_ms();
+    let ticket_ttl_ms = config.lease.ttl_secs.saturating_mul(1000);
     let daemon = Arc::new(Daemon {
         repo_root,
         config,
@@ -119,6 +120,7 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
             by_name: BTreeMap::new(),
             ids: TaskIdAllocator::new(),
             boot: boot_id().ok(),
+            ttl_ms: ticket_ttl_ms,
         }),
         dirty: AtomicBool::new(false),
         shutdown: AtomicBool::new(false),
@@ -307,11 +309,14 @@ struct Queues {
     /// This boot, for holder liveness (`None` if it could not be read: then
     /// only the pid is checked).
     boot: Option<String>,
+    /// Ticket TTL (§12): a granted slot lapses this long after its grant
+    /// even if the holder is alive. `lease.ttl_secs`; §6 has no queue key.
+    ttl_ms: u64,
 }
 
 impl Queues {
-    /// Evicts tickets of dead holders (pid + boot id, §12) and grants the
-    /// freed slots.
+    /// Evicts tickets of dead holders (pid + boot id, §12) and slots whose
+    /// TTL lapsed, and grants the freed slots.
     fn maintain(&mut self, now: Timestamp) {
         let boot = self.boot.clone();
         let dead = |h: &Holder| {
@@ -323,6 +328,15 @@ impl Queues {
                     "queue {}: evicted {} (holder pid {} is gone)",
                     queue.name,
                     ticket.id,
+                    ticket.holder.pid
+                );
+            }
+            for ticket in queue.expire(self.ttl_ms, now) {
+                note!(
+                    "queue {}: {} released (slot TTL of {} s lapsed; holder pid {})",
+                    queue.name,
+                    ticket.id,
+                    self.ttl_ms / 1000,
                     ticket.holder.pid
                 );
             }

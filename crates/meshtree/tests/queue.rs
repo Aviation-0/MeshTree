@@ -231,3 +231,45 @@ fn queue_dead_holder_process_releases_slot() {
     assert!(!gone.ok);
     daemon.stop(root);
 }
+
+#[test]
+fn queue_slot_ttl_lapse_releases_live_holder() {
+    // Ticket TTL is lease.ttl_secs (§12); 2 s keeps the test short.
+    let repo = repo_with_queues();
+    let root = repo.path();
+    let config = fs::read_to_string(root.join(".meshtree/config.toml")).unwrap();
+    fs::write(
+        root.join(".meshtree/config.toml"),
+        format!("{config}\n[lease]\nttl_secs = 2\nheartbeat_secs = 1\n"),
+    )
+    .unwrap();
+    let task = spawn_task(root, "ttl");
+    let daemon = DaemonProc::start(root);
+
+    // This test process holds the slot and stays alive throughout.
+    let first = request(root, &task, "test");
+    assert_eq!(first["granted"], true, "{first}");
+    let granted = Instant::now();
+    let second = request(root, &task, "test");
+    assert_eq!(second["granted"], false, "{second}");
+    let second_id = second["id"].as_str().unwrap().to_string();
+
+    wait_until("TTL grant", || {
+        ok(root, "ticket_status", json!({ "ticket_id": second_id }))["granted"] == true
+    });
+    let waited = granted.elapsed();
+    assert!(
+        waited >= Duration::from_millis(1_900),
+        "granted after {waited:?}, before the 2 s TTL"
+    );
+
+    // The lapsed ticket is gone; releasing it is a no-op.
+    let first_id = first["id"].as_str().unwrap();
+    let resp = rpc(root, "ticket_status", json!({ "ticket_id": first_id }));
+    assert!(!resp.ok, "{resp:?}");
+    let released = ok(root, "release_shared_op", json!({ "ticket_id": first_id }));
+    assert_eq!(released["released"], false);
+    let released = ok(root, "release_shared_op", json!({ "ticket_id": second_id }));
+    assert_eq!(released["released"], true);
+    daemon.stop(root);
+}

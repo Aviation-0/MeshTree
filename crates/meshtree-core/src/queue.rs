@@ -9,6 +9,10 @@
 //! granted tickets are always a prefix of that order and a ticket's
 //! `position` is simply its index: `position < concurrency` ⇔ granted.
 //! Liveness is injected (`is_dead`), keeping this module free of processes.
+//!
+//! A granted slot also lapses `ttl_ms` after its grant even if the holder is
+//! alive ([`SharedQueue::expire`], §12 "or the ticket TTL lapses"); waiting
+//! tickets never expire. Time is injected as well.
 
 use crate::task::TaskId;
 use crate::time::Timestamp;
@@ -151,6 +155,33 @@ impl SharedQueue {
         dead
     }
 
+    /// Removes every granted ticket whose slot is at least `ttl_ms` old at
+    /// `now` (§12 ticket TTL; the holder may still be alive) and grants the
+    /// freed slots to the next waiters at `now`. Returns the expired tickets.
+    pub fn expire(&mut self, ttl_ms: u64, now: Timestamp) -> Vec<QueueTicket> {
+        let lapsed = |t: &QueueTicket| {
+            t.granted_at
+                .is_some_and(|at| now.unix_ms() >= at.unix_ms().saturating_add(ttl_ms))
+        };
+        let (expired, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.tickets)
+            .into_iter()
+            .partition(|t| t.granted && lapsed(t));
+        self.tickets = kept;
+        self.promote(now);
+        expired
+    }
+
+    /// When the earliest granted slot lapses under `ttl_ms` (`None` when no
+    /// slot is granted).
+    pub fn next_expiry(&self, ttl_ms: u64) -> Option<Timestamp> {
+        self.tickets
+            .iter()
+            .filter_map(|t| t.granted_at)
+            .map(|at| at.unix_ms().saturating_add(ttl_ms))
+            .min()
+            .map(Timestamp::from_unix_ms)
+    }
+
     /// Grants waiting tickets in FIFO order while slots are free and
     /// refreshes positions.
     fn promote(&mut self, now: Timestamp) {
@@ -280,5 +311,40 @@ mod tests {
         assert_eq!(v["granted_at"], "1970-01-01T00:00:01.000Z");
         let back: QueueTicket = serde_json::from_value(v).unwrap();
         assert_eq!(back, t);
+    }
+    #[test]
+    fn queue_ticket_ttl_lapse_releases_slot() {
+        let ttl = 900_000;
+        let mut q = SharedQueue::new("test", 1);
+        q.request("q-a".into(), task(1), holder(1), vec![], ts(1_000));
+        q.request("q-b".into(), task(2), holder(2), vec![], ts(1_500));
+        q.request("q-c".into(), task(3), holder(3), vec![], ts(2_000));
+        assert_eq!(q.next_expiry(ttl), Some(ts(1_000 + ttl)));
+
+        // One millisecond early: nothing lapses, even for a live holder.
+        assert!(q.expire(ttl, ts(1_000 + ttl - 1)).is_empty());
+        assert_eq!(
+            state(&q),
+            vec![("q-a", 0, true), ("q-b", 1, false), ("q-c", 2, false)]
+        );
+
+        // Exactly at expiry: q-a's slot is released and q-b, next in FIFO
+        // order, is granted at that instant. Waiting tickets never expire.
+        let expired = q.expire(ttl, ts(1_000 + ttl));
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].id, "q-a");
+        assert_eq!(state(&q), vec![("q-b", 0, true), ("q-c", 1, false)]);
+        assert_eq!(q.get("q-b").unwrap().granted_at, Some(ts(1_000 + ttl)));
+        // q-b's TTL runs from its own grant, not from its request.
+        assert_eq!(q.next_expiry(ttl), Some(ts(1_000 + 2 * ttl)));
+        assert!(q.expire(ttl, ts(1_500 + ttl)).is_empty());
+
+        // Expiry composes with release and with an idle queue.
+        q.release("q-b", ts(1_000 + ttl + 5));
+        assert_eq!(state(&q), vec![("q-c", 0, true)]);
+        assert_eq!(q.expire(ttl, ts(1_000 + 2 * ttl + 5)).len(), 1);
+        assert!(q.tickets().is_empty());
+        assert_eq!(q.next_expiry(ttl), None);
+        assert!(q.expire(ttl, ts(u64::MAX)).is_empty());
     }
 }
