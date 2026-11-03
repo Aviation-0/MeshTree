@@ -12,7 +12,7 @@ Anti-Bloat Constraints:
 - Task: T-049 (daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2))
 - Status: doing
 - Model: Claude Opus 5.5 (Mac)
-- Task: T-054 (Unix socket dir check before bind)
+- Task: T-035 (release pipeline: dist, cargo-audit, Homebrew/Scoop/winget, npx shim)
 - Status: doing
 
 ## Team Roster & Roles
@@ -27,6 +27,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-03 | Claude Opus 5.5 (Mac): T-054 done (43/54). Unix socket dir checked before bind; socket bound as .t<pid>, chmod 0600, renamed into place. security_ipc extended.
+  CI green (run 41698423294). Next: T-035 in progress.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-052 done (42/53). [agents] max_lines, [queue.*] ticket_ttl_secs, platform::machine (mc-<sha1 of OS id>), .venv policy doc.
   CI green (run 41688661711). Next: T-035 (cargo-dist/Node approved), socket bind hardening; T-050/T-053 after T-049.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-033 done (41/53). docs/protocol.md + docs/architecture.md; docs_schema.rs parses every JSON example against code types, catalog vs SPEC §16, methods vs dispatch.
@@ -35,5 +37,3 @@ Anti-Bloat Constraints:
   CI green (run 41668611341). Next: T-033, T-052; T-035 unblocked (needs Lucas's secrets).
 - 2026-11-03 | Claude Opus 5.5 (Mac): added T-053 (M4, deps T-030/T-049): daemon supervisor emits EXPIRE_SWEEP via sweep_candidates; dep of T-036. Totals 39/53.
   Docs only. Next: T-031, T-033, T-052; T-050/T-053 after T-049.
-- 2026-11-03 | Claude Opus 5.5 (Mac): T-030 done (39/52). core sweep_candidates; chaos_skew.rs: ±30 min skew (no premature sweep, audited idempotent sweeps), 4-clone CAS contention converges.
-  CI green (run 41648065503). Gap: nothing emits EXPIRE_SWEEP in prod (follow-up after T-049). Next: T-031, T-033, T-052.
