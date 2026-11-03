@@ -109,7 +109,8 @@ Coordination state that must survive machine boundaries lives in an **orphan git
 ```
 refs/meshtree/coord
 ├── leases/<sha1(normalized-path)>.json   # derived snapshot (fast remote reads)
-├── log/<ULID>.json                        # append-only event log (source of truth)
+├── log/<ULID>.json                        # event log above the snapshot watermark (source of truth)
+├── snapshot/<W>.json                      # replay state at watermark W (ADR-0010; at most one)
 └── tasks/<task-id>.json                    # cross-machine task registry
 ```
 
@@ -140,13 +141,17 @@ strategy = "none"                  # cargo target stays per-worktree; queue seri
 [queue.test]
 concurrency = 1                    # serialized shared operations
 command = "npm test"
+ticket_ttl_secs = 900              # optional; max slot hold after grant (default lease.ttl_secs; ADR-0011)
 
 [queue.build]
 concurrency = 1
 command = "npm run build"
 
-[machine]                          # optional; auto-derived from OS machine-id if absent
-id = "mc-lucas-mac"
+[agents]
+max_lines = 10                     # cap for the generated AGENTS.md block (§13; ADR-0011)
+
+[machine]                          # optional; if absent: "mc-" + 16 hex of sha1(OS machine-id),
+id = "mc-lucas-mac"                # else "mc-<hostname>" (ADR-0011)
 ```
 
 ---
@@ -277,12 +282,14 @@ Event types: `ACQUIRE`, `RELEASE`, `HEARTBEAT`, `EXPIRE_SWEEP` (any machine may 
 
 ### Deterministic replay (lease table derivation)
 
-1. Union all events in the ref's `log/` tree (union is conflict-free: ULID filenames are unique).
-2. Sort by ordering key.
+1. Load `snapshot/<W>.json` if present, then union all events in the ref's `log/` tree (union is conflict-free: ULID filenames are unique), dropping events whose ordering key is ≤ `W`.
+2. Sort by ordering key; fold them onto the snapshot state.
 3. Replay: `ACQUIRE` wins a free or expired path; a conflicting later `ACQUIRE` is recorded as `REJECTED` (kept in the log for audit; the claiming daemon is notified and revokes its local claim).
 4. `leases/*.json` is rewritten as a derived snapshot for fast reads by other machines.
 
 Any two machines replaying the same log derive **byte-identical lease tables** — this property is unit- and property-tested.
+
+**Compaction (ADR-0010).** A daemon may fold events with `ts ≤ newest_event.ts − max(24 h, 4 × (ttl_secs + 2 × skew_grace_secs))` into `snapshot/<W>.json` (`W` = ordering key of the newest folded event, computed from the log, never the wall clock) once more than 1,000 such events exist; compaction is an ordinary CAS sync round. Between tips, the larger `W` wins. An event that reaches the ref after a compaction passed it is dropped, and its originating daemon re-issues it from the WAL as a fresh event (a re-issued `ACQUIRE` wins or is `REJECTED` → `MT-001`). Invariant: `replay(compact(log)) == replay(log)`.
 
 ### Atomic update via CAS
 
@@ -360,7 +367,7 @@ Fresh worktrees break builds (missing `node_modules`/`target`) or duplicate giga
 | `node_modules` (npm) | symlink → primary worktree | **junction** (`mklink /J` semantics; no admin rights needed) | shared |
 | pnpm store | global store already shared; `.pnpm` virtual store symlinked | junction | shared |
 | `target` (Rust) | per-worktree (cargo's own flock + cache deps) | per-worktree | **not shared**; build queue serializes concurrent cargo runs |
-| `.venv` (Python) | never shared (path-embedded interpreters); recreated from lock | same | recreate |
+| `.venv` (Python) | never shared (path-embedded interpreters); recreated from lock by the project's own tooling, not MeshTree (ADR-0011) | same | not shared |
 | Read-only caches (`~/.cargo`, turbo, next cache) | `clonefile` (`cp -c`, APFS copy-on-write) | junction | shared |
 
 Rules baked into the implementation:
@@ -373,7 +380,7 @@ Rules baked into the implementation:
 
 ## 12. Shared-Operation Queue
 
-Per-queue FIFO with `concurrency = N` from config. Agents call `request_shared_op(queue)` → receive a ticket → are granted in order → hold the slot until the command exits or the ticket TTL lapses (dead-process detection via pid + boot-id, so a killed agent never wedges the queue). Queues are **local** per machine — two machines may run their own test suites concurrently; what cross-machine correctness requires is *merge* serialization, handled by the merge gate.
+Per-queue FIFO with `concurrency = N` from config. Agents call `request_shared_op(queue)` → receive a ticket → are granted in order → hold the slot until the command exits or the ticket TTL (`ticket_ttl_secs`, §6) lapses (dead-process detection via pid + boot-id, so a killed agent never wedges the queue). Queues are **local** per machine — two machines may run their own test suites concurrently; what cross-machine correctness requires is *merge* serialization, handled by the merge gate.
 
 ---
 
@@ -404,7 +411,7 @@ Per-task handoff lives **on the task branch** (`.meshtree/tasks/<id>/HANDOFF.md`
 <!-- meshtree:active-sessions end -->
 ```
 
-Rolling summary capped at 10 lines by default (configurable) — this replaces the hand-maintained handoff state with a generated, always-current view. Deterministic ordering (task id) keeps git diffs — and prompt caches — stable.
+Rolling summary capped at 10 lines by default (configurable: `[agents] max_lines`, §6) — this replaces the hand-maintained handoff state with a generated, always-current view. Deterministic ordering (task id) keeps git diffs — and prompt caches — stable.
 
 ---
 
@@ -480,7 +487,7 @@ All tools return MeshTree error codes (§16) as MCP tool errors so agents can se
 
 ### Unit tests (`meshtree-core`, pure, no fs)
 
-- Lease replay determinism: randomized event streams (property-based, `proptest`) → identical lease tables regardless of insertion order.
+- Lease replay determinism: randomized event streams (property-based, `proptest`) → identical lease tables regardless of insertion order; and `replay(compact(log)) == replay(log)` (ADR-0010).
 - TTL expiry under injected clock skew (holder-ts semantics + grace).
 - Pattern conflict rule: exhaustive case table for glob overlap; **zero false negatives** asserted.
 - Handoff → AGENTS.md rendering: byte-stable snapshots.
@@ -503,7 +510,7 @@ All tools return MeshTree error codes (§16) as MCP tool errors so agents can se
 | Scenario | Metric |
 |---|---|
 | Spawn on 2 GB `node_modules` repo | < 5 s (link-based sharing) |
-| Claim acquire (local) | p95 < 50 ms |
+| Claim acquire (local) | p95 < 50 ms, including at ≥ 10,000 lifetime events (ADR-0010) |
 | Cross-machine claim CAS round | p95 < 2 s (GitHub remote RTT) |
 | Two agents, one repo, 20-min session | silent-overwrite incidents: **0** (baseline without MeshTree: N>0, reported) |
 | `index.lock` collisions | 0 with queue vs baseline |
