@@ -11,9 +11,6 @@ Anti-Bloat Constraints:
 - Model: Claude Opus 5.5 (Windows)
 - Task: T-049 (daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2))
 - Status: doing
-- Model: Claude Opus 5.5 (Mac)
-- Task: T-031 (§17 security suite & core coverage gate)
-- Status: doing (2026-11-03)
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -27,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-03 | Claude Opus 5.5 (Mac): T-031 done (40/53). §17 suite: queue overrides, .meshtree claims, Unix socket dir, Windows pipe DACL read-back; CI coverage job (core 97.0% lines, gate 85%).
+  CI green (run 41668611341). Next: T-033, T-052; T-035 unblocked (needs Lucas's secrets).
 - 2026-11-03 | Claude Opus 5.5 (Mac): added T-053 (M4, deps T-030/T-049): daemon supervisor emits EXPIRE_SWEEP via sweep_candidates; dep of T-036. Totals 39/53.
   Docs only. Next: T-031, T-033, T-052; T-050/T-053 after T-049.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-030 done (39/52). core sweep_candidates; chaos_skew.rs: ±30 min skew (no premature sweep, audited idempotent sweeps), 4-clone CAS contention converges.
@@ -35,5 +34,3 @@ Anti-Bloat Constraints:
   Backlog scope column updated; T-049 lock/status untouched. Next: T-049 (Windows) re-measure; T-030, T-052.
 - 2026-11-03 | Claude Opus 5.5 (Mac): alignment audit (docs only). ADR-0010 (log compaction) + ADR-0011 (config keys, OS machine-id, .venv) Accepted; SPEC amended. Added T-050/T-051/T-052; T-030 unblocked from T-045.
   Totals 38/52. T-049 lock untouched; its pattern-scope request still needs Lucas's answer. Next: T-030, T-052.
-- 2026-11-02 | Claude Opus 5.5 (Windows): T-049 IN PROGRESS (lock held). In-memory claims + WAL events + bg commit landed, CI green. Bench claim p95 @100 ev 5/14/30 ms OK; @2000 ev 67/122/77 ms NOT met.
-  Next: widen scope to core::pattern fast-negative (needs OK), re-measure.
