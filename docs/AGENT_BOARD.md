@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-03 | Claude Opus 5.5 (Mac): Lucas Pan approved T-049 scope widening into core::pattern (fast-negative pre-check in conflicts_raw; zero false negatives must hold).
+  Backlog scope column updated; T-049 lock/status untouched. Next: T-049 (Windows) re-measure; T-030, T-052.
 - 2026-11-03 | Claude Opus 5.5 (Mac): alignment audit (docs only). ADR-0010 (log compaction) + ADR-0011 (config keys, OS machine-id, .venv) Accepted; SPEC amended. Added T-050/T-051/T-052; T-030 unblocked from T-045.
   Totals 38/52. T-049 lock untouched; its pattern-scope request still needs Lucas's answer. Next: T-030, T-052.
 - 2026-11-02 | Claude Opus 5.5 (Windows): T-049 IN PROGRESS (lock held). In-memory claims + WAL events + bg commit landed, CI green. Bench claim p95 @100 ev 5/14/30 ms OK; @2000 ev 67/122/77 ms NOT met.
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41561529557). Next: T-049, T-045 (human).
 - 2026-11-02 | Claude Opus 5.5 (Windows): T-047 done (37/49). Daemon transitions (collect edges, recovery, sweeper abandon) publish tasks/<id>.json best-effort; recovery publishes deferred until serving.
   CI green (run 41559983307). Next: T-045 (human), T-048.
-- 2026-11-02 | Claude Opus 5.5 (Windows): ADR-0009 Accepted (both parts) by Lucas Pan; SPEC §9/§10/§15 amended; T-048 (O(changes) sync) + T-049 (in-memory claims, WAL events, async commit) added to M4.
-  Totals 36/49. Next: T-045 (human), T-047, T-048.
