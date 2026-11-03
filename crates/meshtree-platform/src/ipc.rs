@@ -405,7 +405,16 @@ mod sys {
     }
 
     impl Listener {
+        /// The directory is checked before anything is created or removed
+        /// in it, and the socket is bound under a temporary name, set to
+        /// `0600`, then renamed into place, so no client can ever reach it
+        /// with looser permissions (§17).
         pub fn bind(path: &Path) -> io::Result<Self> {
+            let parent = match path.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p,
+                _ => Path::new("."),
+            };
+            check_socket_dir(parent)?;
             if path.exists() {
                 if UnixStream::connect(path).is_ok() {
                     return Err(io::Error::new(
@@ -416,9 +425,15 @@ mod sys {
                 // Stale socket from a dead daemon.
                 fs::remove_file(path)?;
             }
-            let listener = UnixListener::bind(path)?;
-            if let Err(err) = restrict(path) {
-                let _ = fs::remove_file(path);
+            // Never longer than `daemon.sock`, so it fits wherever the
+            // final path fits within `sun_path` (`ADR-0007`).
+            let tmp = parent.join(format!(".t{}", std::process::id()));
+            let _ = fs::remove_file(&tmp);
+            let listener = UnixListener::bind(&tmp)?;
+            let placed = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
+                .and_then(|()| fs::rename(&tmp, path));
+            if let Err(err) = placed {
+                let _ = fs::remove_file(&tmp);
                 return Err(err);
             }
             Ok(Self {
@@ -433,20 +448,17 @@ mod sys {
         }
     }
 
-    /// §17: socket `0600`; its directory must belong to the same user and
-    /// not be writable by group or others (else another user could swap the
+    /// §17: the socket's directory must belong to the daemon user and not
+    /// be writable by group or others (else another user could swap the
     /// socket).
-    fn restrict(path: &Path) -> io::Result<()> {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        let socket = fs::metadata(path)?;
-        let parent = path.parent().unwrap_or(Path::new("."));
-        let dir = fs::metadata(parent)?;
-        if dir.uid() != socket.uid() || dir.mode() & 0o022 != 0 {
+    fn check_socket_dir(dir: &Path) -> io::Result<()> {
+        let meta = fs::metadata(dir)?;
+        if meta.uid() != uid() || meta.mode() & 0o022 != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
                     "{} must be owned by the daemon user and not group/world-writable",
-                    parent.display()
+                    dir.display()
                 ),
             ));
         }

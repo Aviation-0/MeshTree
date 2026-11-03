@@ -1,8 +1,9 @@
 //! §17 daemon endpoint access control (`SPEC.md` §17, §10 IPC table).
 //!
 //! Unix: the socket's directory must belong to the daemon user and not be
-//! group/world-writable, else `bind` is refused (another user could swap the
-//! socket). Windows: the pipe's security descriptor, read back from a live
+//! group/world-writable, else `bind` is refused before it touches the
+//! directory (another user could swap the socket); the socket appears only
+//! once it is `0600`. Windows: the pipe's security descriptor, read back from a live
 //! pipe, grants access to the owner and SYSTEM only. Each half is compiled
 //! for its platform, so every CI OS runs exactly one of the two.
 
@@ -73,11 +74,34 @@ fn security_unix_socket_parent_dir_rejected() {
         );
     }
 
+    // The check runs before bind touches the directory: an existing file at
+    // the socket path survives, and no temporary socket is left behind.
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+    fs::write(endpoint.path(), b"not a socket").unwrap();
+    assert!(IpcListener::bind(&endpoint).is_err());
+    assert_eq!(fs::read(endpoint.path()).unwrap(), b"not a socket");
+    let leftovers: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .filter(|n| n != "daemon.sock")
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+    fs::remove_file(endpoint.path()).unwrap();
+
     // Owner-only directory: bind succeeds and the socket is 0600.
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
     let listener = IpcListener::bind(&endpoint).expect("bind with a safe directory");
     let mode = fs::metadata(endpoint.path()).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+    let names: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        names,
+        ["daemon.sock"],
+        "temporary socket renamed into place"
+    );
     drop(listener);
 }
 
