@@ -970,15 +970,25 @@ impl Daemon {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (batch, waited) = {
-            let leases = self.leases();
+            let mut leases = self.leases();
+            leases.set_flushing(true);
             (leases.pending(), leases.waiting())
         };
         let started = Instant::now();
-        let store = claims::store(&self.repo_root, &self.config)?;
-        let outcome = store.sync(&batch).map_err(claims::coord_error)?;
-        let (log, _) = store
-            .read_log(&outcome.oid)
-            .map_err(|err| CliError::new(PLATFORM, err.to_string()))?;
+        let committed = claims::store(&self.repo_root, &self.config).and_then(|store| {
+            let outcome = store.sync(&batch).map_err(claims::coord_error)?;
+            let (log, _) = store
+                .read_log(&outcome.oid)
+                .map_err(|err| CliError::new(PLATFORM, err.to_string()))?;
+            Ok((outcome, log))
+        });
+        let (outcome, log) = match committed {
+            Ok(done) => done,
+            Err(err) => {
+                self.leases().set_flushing(false);
+                return Err(err);
+            }
+        };
         self.leases().flushed(outcome.oid.clone(), log);
         self.dirty
             .store(outcome.deferred.is_some(), Ordering::SeqCst);

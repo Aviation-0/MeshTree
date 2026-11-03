@@ -51,6 +51,10 @@ pub struct Leases {
     pending: Vec<LeaseEvent>,
     /// When the oldest pending event was acknowledged.
     since: Option<Instant>,
+    /// This daemon's writer is committing: the ref may move before
+    /// [`Leases::flushed`] delivers the new log, so [`Leases::refresh`] waits
+    /// for it instead of reloading the whole log itself.
+    flushing: bool,
 }
 
 impl Leases {
@@ -65,11 +69,19 @@ impl Leases {
             tip: None,
             pending: Vec::new(),
             since: None,
+            flushing: false,
         }
     }
 
     /// Reloads the log if the local ref moved since it was read.
     pub fn refresh(&mut self, store: &CoordStore<CliGitOps>) -> Result<(), CliError> {
+        if self.flushing {
+            // The writer's flush unions every event in the ref and hands the
+            // result to `flushed` shortly; until then the cached log plus
+            // `pending` is what this daemon committed (§9 revocation covers a
+            // concurrent foreign writer).
+            return Ok(());
+        }
         let tip = current_tip(&self.repo_root, store.git())?;
         if self.tip.as_ref() == Some(&tip) {
             return Ok(());
@@ -176,7 +188,13 @@ impl Leases {
 
     /// A commit of the ref to `tip` holding `log` succeeded.
     pub fn flushed(&mut self, tip: String, log: Vec<LeaseEvent>) {
+        self.flushing = false;
         self.set_log(Some(tip), log);
+    }
+
+    /// The writer starts (`true`) or abandons (`false`) a commit.
+    pub fn set_flushing(&mut self, flushing: bool) {
+        self.flushing = flushing;
     }
 
     /// Re-adds journaled events missing from the ref (crash recovery,
