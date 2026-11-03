@@ -12,7 +12,7 @@ Anti-Bloat Constraints:
 - Task: T-049 (daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2))
 - Status: doing
 - Model: Claude Opus 5.5 (Mac)
-- Task: T-041 (crates.io publish readiness)
+- Task: T-042 (MCP directory listing manifest)
 - Status: doing
 
 ## Team Roster & Roles
@@ -27,6 +27,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-03 | Claude Opus 5.5 (Mac): T-041 done (45/54). MIT OR Apache-2.0, crates.io metadata + READMEs, versioned path deps, CI publish dry-run job.
+  CI green (run 41701931244). Next: T-042.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-035 done (44/54). dist release.yml (+regen script), release-audit/-publish workflows (each channel gated on its secret), Scoop/winget templates, meshtree-mcp npx shim.
   CI green (run 41700134955). Unverified until first tag: release run, shim download, Windows zip layout. Next: T-041, T-042.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-054 done (43/54). Unix socket dir checked before bind; socket bound as .t<pid>, chmod 0600, renamed into place. security_ipc extended.
@@ -35,5 +37,3 @@ Anti-Bloat Constraints:
   CI green (run 41688661711). Next: T-035 (cargo-dist/Node approved), socket bind hardening; T-050/T-053 after T-049.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-033 done (41/53). docs/protocol.md + docs/architecture.md; docs_schema.rs parses every JSON example against code types, catalog vs SPEC §16, methods vs dispatch.
   CI green (run 41683066476). Next: T-052; T-035 (needs Lucas's secrets); T-050/T-053 after T-049.
-- 2026-11-03 | Claude Opus 5.5 (Mac): T-031 done (40/53). §17 suite: queue overrides, .meshtree claims, Unix socket dir, Windows pipe DACL read-back; CI coverage job (core 97.0% lines, gate 85%).
-  CI green (run 41668611341). Next: T-033, T-052; T-035 unblocked (needs Lucas's secrets).
