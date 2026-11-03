@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-048 (history-independent coordination sync (ADR-0009 Part 1))
-- Status: doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-02 | Claude Opus 5.5 (Windows): T-048 done (38/49). Sync = const ~10 git procs (batched cat-file/hash-object, blob reuse). Claim time still O(log) in-process (877 ms Linux @2000 events); T-049 + future compaction ADR.
+    CI green (run 41561529557). Next: T-049, T-045 (human).
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-047 done (37/49). Daemon transitions (collect edges, recovery, sweeper abandon) publish tasks/<id>.json best-effort; recovery publishes deferred until serving.
     CI green (run 41559983307). Next: T-045 (human), T-048.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): ADR-0009 Accepted (both parts) by Lucas Pan; SPEC §9/§10/§15 amended; T-048 (O(changes) sync) + T-049 (in-memory claims, WAL events, async commit) added to M4.
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
     Needs Lucas Pan decision; T-048/T-049 on acceptance. Next: T-045 (human), T-047.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-034 done (36/47). xtask bench (6 §18 scenarios + baselines), smoke test + docs/benchmarks.md (3-OS smoke). Local claim p95 misses 50 ms on all OSes (99/856/1804 ms): sync git subprocesses; design decision needed.
     CI green (run 41557533637). Full-scale run pending on Mac. Next: T-045 (human), T-047.
-- - 2026-11-02 | Claude Opus 5.5 (Windows): T-029 done (35/46). full_lifecycle + two-agent (MCP+CLI) zero-overwrite E2E green. Session did T-032/039/040/043/029.
-    CI green (run 41552296766). Next: T-045 (human), T-034. Open: registry publish on merge/sweep.
