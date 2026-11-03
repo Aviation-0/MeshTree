@@ -34,7 +34,16 @@ Bold cells miss the §18 target.
 - **Local claim misses `p95 < 50 ms` on every OS, and the cost grows with history.**
   - Each `claim_paths` runs a synchronous coordination-ref sync round. That round re-reads every `log/*.json` blob with one `git cat-file` process each and re-hashes every file of the tree with one `git hash-object` each: about 2N + L + 8 subprocesses for N logged events and L leases.
   - The log is append-only, so claims slow down as a repository is used. Process creation is expensive on macOS and Windows, which is why those numbers are so much higher.
-  - `ADR-0009` (Proposed) addresses it in two parts: (1) make sync rounds independent of history (event cache, batched reads and writes, tree reuse); (2) have the daemon answer from its in-memory lease table after a WAL append and commit/push in the background within 250 ms.
+  - `ADR-0009` (Accepted) addresses it in two parts: (1) make sync rounds independent of history (event cache, batched reads and writes, tree reuse); (2) have the daemon answer from its in-memory lease table after a WAL append and commit/push in the background within 250 ms.
+- **After `T-048` (ADR-0009 Part 1; CI run 41561529557):** a claim round now runs a fixed ~10 git processes whatever the log length, and small-log claims got 2–4× faster. Claim **time** still grows with the log, though, because every round still moves and processes the whole log in-process: one batched read of every blob, decoding, replay, re-encoding, and a full `mktree` of every directory.
+
+  | Local claim p95 | Linux | macOS | Windows |
+  |---|---|---|---|
+  | `T-034` (~80 logged events, before) | 99 ms | 856 ms | 1804 ms |
+  | `T-048`, 100 logged events | 62 ms | 188 ms | 510 ms |
+  | `T-048`, 2,000 logged events | 877 ms | 1247 ms | 2336 ms |
+
+  `T-049` (Part 2) takes this work off the claim path: the daemon answers from memory, and the ref write happens in the background. The background write is still O(log) per flush. Bounding it (log compaction, or sharding `log/` into subdirectories so a round rewrites only a small subtree) would change the §5 layout and needs its own ADR.
 - **The cross-machine CAS round meets the target here, but only against a local `file://` remote.** Most of each round is the same subprocess cost as above. A real GitHub remote adds network RTT on top, so the full-scale run with `--remote` decides this row.
 - **The silent-overwrite baseline depends on scale.** In the baseline, two agents read, modify and write one shared checkout. With only 12 edits per smoke session, lost updates showed up on one runner (4 of 12) and not on the others. The §18 "baseline N > 0" needs the full session (20 rounds × 5 edits × 2 agents). MeshTree recorded 0 silent overwrites on every OS: every refused claim or merge was reported to the agent.
 - **`index.lock`.** Unqueued concurrent `git add -A` in one worktree collided in 38–67 % of writes. Through a concurrency-1 queue, none collided.
