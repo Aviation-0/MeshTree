@@ -5,7 +5,7 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate` (Week 3 · Target: `2026-11-22`)
-- **In-Progress Task (`doing`):** None
+- **In-Progress Task (`doing`):** `T-034` — xtask benchmark suite (Claude Opus 5.5, Windows)
 - **Next Up (`todo`, dependencies satisfied):**
   1. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; gates `T-030`) (`docs/mvp-acceptance.md`)
   2. `T-034` — `xtask` reproducible benchmark suite (all 6 §18 scenarios) (`xtask/**`)
@@ -38,9 +38,9 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 12 | 0 | 0 | 0 | `done` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 8 | 0 | 0 | 1 | `doing` |
 | **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047` | 5 | 1 | 0 | 0 | 4 | `doing` |
-| **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042` | 5 | 0 | 0 | 0 | 5 | `todo` |
+| **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042` | 5 | 0 | 1 | 0 | 4 | `doing` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-047`** | **47** | **35** | **0** | **0** | **12** | **74% (`35 / 47`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-047`** | **47** | **35** | **1** | **0** | **11** | **74% (`35 / 47`)** |
 
 ---
 
