@@ -5,7 +5,7 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M4 — Chaos Suite, Coverage Gate & Technical Docs` (M2 done; M3 awaits human `T-045`)
-- **In-Progress Task (`doing`):** `T-049` — daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2) (Claude Opus 5.5, Windows)
+- **In-Progress Task (`doing`):** `T-049` — daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2) (Claude Opus 5.5, Windows); `T-054` — Unix socket bind hardening (Claude Opus 5.5, Mac)
 - **Next Up (`todo`, dependencies satisfied):**
   1. `T-035` — release pipeline (unblocked; needs Lucas Pan's secrets and tap repos)
   2. `T-050` — Coordination-log compaction (`ADR-0010`; after `T-049`); `T-053` — daemon emits `EXPIRE_SWEEP` (after `T-049`)
@@ -45,10 +45,10 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 4 | 0 | 0 | 0 | `done` |
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 12 | 0 | 0 | 0 | `done` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 8 | 0 | 0 | 1 | `doing` |
-| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047`–`T-050`, `T-052`–`T-053` | 10 | 7 | 1 | 0 | 2 | `doing` |
+| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047`–`T-050`, `T-052`–`T-054` | 11 | 7 | 2 | 0 | 2 | `doing` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042`, `T-051` | 6 | 1 | 0 | 0 | 5 | `doing` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-053`** | **53** | **42** | **1** | **0** | **10** | **79% (`42 / 53`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-054`** | **54** | **42** | **2** | **0** | **10** | **78% (`42 / 54`)** |
 
 ---
 
