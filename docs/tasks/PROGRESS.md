@@ -9,7 +9,7 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 - **Next Up (`todo`, dependencies satisfied):**
   1. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; gates `T-030`) (`docs/mvp-acceptance.md`)
   2. `T-034` — `xtask` reproducible benchmark suite (all 6 §18 scenarios) (`xtask/**`)
-  - Follow-up candidate (not yet a backlog task): publish merge-gate and sweeper status changes to the coord task registry (`T-043` open note)
+  3. `T-047` — Publish merge-gate and sweeper status changes to the coord task registry (`crates/meshtree`: `merge_gate`, `daemon`)
 - **Latest (2026-11-02, Claude Opus 5.5, Windows):** `T-029` done (35/46) — `full_lifecycle_spawn_claim_handoff_collect_merged` and `two_agents_mcp_and_cli_parallel_session_zero_overwrites` green on all 3 OSes (CI run 41552296766). This session also closed `T-032`, `T-039`, `T-040`, `T-043`; M2 is complete. MVP gate still needs the human-run `T-045`.
 - **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-043` done (34/46) — cross-machine task registry `tasks/<id>.json` in `refs/meshtree/coord` (revision-wins merge across tips); `spawn`, failed spawns and `abort` publish through the CAS sync; merge/sweeper publishing still open; CI run 41551357771 green on all 3 OSes.
 - **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-040` done (33/46) — a granted queue slot lapses `lease.ttl_secs` after its grant even with a live holder, and the next FIFO ticket is granted at that instant (injected-clock test + daemon test); CI run 41550700924 green on all 3 OSes.
@@ -37,10 +37,10 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 4 | 0 | 0 | 0 | `done` |
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 12 | 0 | 0 | 0 | `done` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 8 | 0 | 0 | 1 | `doing` |
-| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033` | 4 | 1 | 0 | 0 | 3 | `doing` |
+| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047` | 5 | 1 | 0 | 0 | 4 | `doing` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042` | 5 | 0 | 0 | 0 | 5 | `todo` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **35** | **0** | **0** | **11** | **76% (`35 / 46`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-047`** | **47** | **35** | **0** | **0** | **12** | **74% (`35 / 47`)** |
 
 ---
 
