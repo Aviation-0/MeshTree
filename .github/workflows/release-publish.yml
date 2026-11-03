@@ -67,6 +67,7 @@ jobs:
         working-directory: packages/meshtree-mcp
         run: |
           npm version "$VERSION" --no-git-tag-version --allow-same-version
+          node -e 'const f="server.json",fs=require("fs"),m=JSON.parse(fs.readFileSync(f));m.version=m.packages[0].version=process.env.VERSION;fs.writeFileSync(f,JSON.stringify(m,null,2)+"\n")'
           npm publish --access public
 
   scoop:

@@ -1,0 +1,88 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.aviation-0/meshtree",
+  "title": "MeshTree",
+  "description": "Coordinate parallel AI coding agents across git worktrees and machines",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/Aviation-0/MeshTree",
+  "repository": {
+    "url": "https://github.com/Aviation-0/MeshTree",
+    "source": "github",
+    "subfolder": "packages/meshtree-mcp"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "meshtree-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MESHTREE_BIN",
+          "description": "Path to an installed meshtree binary (default: meshtree on PATH, else the release binary is downloaded)",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MESHTREE_MCP_CACHE",
+          "description": "Cache directory for downloaded binaries (default: ~/.cache/meshtree-mcp)",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "tools": [
+        {
+          "name": "spawn_task",
+          "description": "Create an isolated task worktree and branch (optionally claiming paths first)."
+        },
+        {
+          "name": "task_status",
+          "description": "One task record, or all task records when task_id is omitted."
+        },
+        {
+          "name": "list_tasks",
+          "description": "Task records; active_only keeps active, collecting and merging tasks."
+        },
+        {
+          "name": "claim_paths",
+          "description": "Claim path patterns for an active task: all granted, or MT-001 naming the holders."
+        },
+        {
+          "name": "release_paths",
+          "description": "Release path claims held by an active task."
+        },
+        {
+          "name": "request_shared_op",
+          "description": "Wait for a slot in a shared-operation queue, run its configured command in the task worktree, release the slot, and return the result."
+        },
+        {
+          "name": "commit_handoff",
+          "description": "Commit the task's handoff record on its branch (given fields replace those already recorded) and regenerate the AGENTS.md block."
+        },
+        {
+          "name": "collect_task",
+          "description": "Validate and merge the task into the integration branch (MT-030/031/032 on failure)."
+        },
+        {
+          "name": "abort_task",
+          "description": "Discard an active task: release its claims, remove its worktree, mark it abandoned."
+        },
+        {
+          "name": "render_agents_block",
+          "description": "Regenerate the Active Sessions block in the root AGENTS.md and return it."
+        },
+        {
+          "name": "sync",
+          "description": "Flush local claim events and pull remote ones (refs/meshtree/coord)."
+        }
+      ]
+    }
+  }
+}

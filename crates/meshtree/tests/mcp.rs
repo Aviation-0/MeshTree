@@ -385,3 +385,55 @@ fn mcp_client_eof_exits_without_killing_daemon() {
     assert_eq!(ping(root)["pid"], daemon.pid());
     daemon.stop(root);
 }
+
+#[test]
+fn mcp_listing_manifest_matches_server_tools() {
+    // packages/meshtree-mcp/server.json (MCP registry format) lists exactly
+    // the tools `meshtree mcp` advertises, with the same descriptions, and
+    // its versions and names agree with the crate and the npm package.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |rel: &str| -> Value {
+        serde_json::from_str(&fs::read_to_string(root.join(rel)).unwrap())
+            .unwrap_or_else(|err| panic!("{rel}: {err}"))
+    };
+    let manifest = read("packages/meshtree-mcp/server.json");
+    let package = read("packages/meshtree-mcp/package.json");
+
+    let repo = repo();
+    let mut mcp = Mcp::start(repo.path());
+    let listed = mcp.request("tools/list", json!({}));
+    let served: Vec<(String, String)> = listed["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{listed}"))
+        .iter()
+        .map(|t| {
+            (
+                t["name"].as_str().unwrap().to_string(),
+                t["description"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let documented: Vec<(String, String)> = manifest["_meta"]
+        ["io.modelcontextprotocol.registry/publisher-provided"]["tools"]
+        .as_array()
+        .expect("manifest tool list")
+        .iter()
+        .map(|t| {
+            (
+                t["name"].as_str().unwrap().to_string(),
+                t["description"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(served.len(), 11, "SPEC §15 lists 11 tools: {served:?}");
+    assert_eq!(documented, served, "server.json tools vs tools/list");
+
+    let version = env!("CARGO_PKG_VERSION");
+    assert_eq!(manifest["version"], version);
+    assert_eq!(manifest["packages"][0]["version"], version);
+    assert_eq!(manifest["packages"][0]["registryType"], "npm");
+    assert_eq!(manifest["packages"][0]["identifier"], package["name"]);
+    assert_eq!(manifest["packages"][0]["transport"]["type"], "stdio");
+    assert_eq!(manifest["name"], package["mcpName"]);
+    assert!(manifest["description"].as_str().unwrap().len() <= 100);
+}
