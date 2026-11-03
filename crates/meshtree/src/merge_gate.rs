@@ -26,8 +26,18 @@
 //!
 //! `meshtree promote` fast-forwards `project.base_branch` to the integration
 //! tip (step 6, the human gate). Every integration commit already passed
-//! `promote_validate`, so promote only refuses non-fast-forwards. Pushing the
-//! integration branch to the remote (non-fast-forward retry) is `T-039`.
+//! `promote_validate`, so promote only refuses non-fast-forwards.
+//!
+//! With an `origin` remote, steps 4–5 form one round that ends with a
+//! `--force-with-lease` push of the validated merge to `origin/<integration>`
+//! before the local ref moves (`T-039`). Each round fetches the remote tip
+//! and starts from it (fast-forward), or, when the local branch holds merges
+//! the remote lacks (an earlier push was deferred), replay-merges the remote
+//! tip into it. A lost push race reruns the round on the new remote tip, at
+//! most [`MAX_PUSH_ATTEMPTS`] times, then `MT-031` (`merging → active`). A
+//! fetch or push failure that is not a race (network, auth) does not fail
+//! the merge: the local ref moves, the result reports the push as deferred,
+//! and the next collect publishes it.
 
 use crate::claims;
 use crate::exit::{CliError, PLATFORM, TASK, USAGE};
@@ -56,6 +66,13 @@ pub const INTEGRATION_WORKTREE: &str = "integration";
 
 /// Lines of command output kept in an `MT-030` message.
 const OUTPUT_TAIL_LINES: usize = 20;
+
+/// Bound on fetch, merge, validate, push rounds (`SPEC.md` §8 step 4,
+/// "bounded ×5").
+pub const MAX_PUSH_ATTEMPTS: u32 = 5;
+
+/// Local ref holding the last fetched remote integration tip.
+const REMOTE_INTEGRATION_REF: &str = "refs/meshtree/remote-integration";
 
 /// "Ref must not exist" for a local `update-ref` CAS.
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
@@ -158,63 +175,134 @@ fn gate<H: Host>(host: &H, task: &mut Task, message: Option<&str>) -> Result<Val
     let _merge = host.merge_mutex();
     host.transition(task, TaskStatus::Merging)?;
 
-    // 4. Merge into the integration branch in its own worktree. The branch
-    // starts at the base branch and is only created by a validated merge.
-    let integration_ref = format!("refs/heads/{}", config.project.integration_branch);
-    let existing = git.ref_read(&integration_ref).map_err(git_error)?;
-    let tip = match &existing {
-        Some(tip) => tip.clone(),
-        None => git
-            .rev_parse(&config.project.base_branch)
-            .map_err(git_error)?,
-    };
+    // 4–5. Merge into the integration branch in its own worktree, validate,
+    // then publish: remote CAS push first (when `origin` exists), local ref
+    // last. A lost push race reruns the round on the new remote tip.
+    let integration_branch = &config.project.integration_branch;
+    let integration_ref = format!("refs/heads/{integration_branch}");
+    let remote = git
+        .remote_url(claims::REMOTE)
+        .map_err(git_error)?
+        .map(|_| claims::REMOTE);
     let integration = integration_worktree(&repo_root);
     let wt = CliGitOps::new(&integration);
-    if integration.exists() {
-        wt.reset_clean(&tip).map_err(git_error)?;
-    } else {
-        git.worktree_add_detached(&integration, &tip)
-            .map_err(git_error)?;
-    }
     let message = message
         .map(str::to_string)
         .unwrap_or_else(|| format!("meshtree: merge {id} ({})", task.name));
-    let merged = match wt.merge_no_ff(&task.branch, &message).map_err(git_error)? {
-        MergeOutcome::Merged(oid) => oid,
-        MergeOutcome::Conflict(paths) => {
+    let mut attempt = 0;
+    let (merged, pushed, deferred) = loop {
+        attempt += 1;
+        let local = git.ref_read(&integration_ref).map_err(git_error)?;
+        let (remote_tip, mut deferred) = match remote {
+            None => (None, None),
+            Some(remote) => match git.fetch_ref(remote, &integration_ref, REMOTE_INTEGRATION_REF) {
+                Ok(tip) => (tip, None),
+                Err(err) => (None, Some(format!("fetch failed: {err}"))),
+            },
+        };
+        let remote_known = remote.is_some() && deferred.is_none();
+
+        // The branch starts at the base branch and is only created by a
+        // validated merge.
+        let start = match local.clone().or_else(|| remote_tip.clone()) {
+            Some(start) => start,
+            None => git
+                .rev_parse(&config.project.base_branch)
+                .map_err(git_error)?,
+        };
+        if integration.exists() {
+            wt.reset_clean(&start).map_err(git_error)?;
+        } else {
+            git.worktree_add_detached(&integration, &start)
+                .map_err(git_error)?;
+        }
+        if let (Some(ours), Some(theirs)) = (&local, &remote_tip) {
+            if ours != theirs && !git.is_ancestor(theirs, ours).map_err(git_error)? {
+                if git.is_ancestor(ours, theirs).map_err(git_error)? {
+                    wt.reset_clean(theirs).map_err(git_error)?;
+                } else {
+                    // Local merges the remote lacks (an earlier push was
+                    // deferred): replay-merge the remote tip first.
+                    let sync = format!("meshtree: sync {integration_branch} with origin");
+                    if let MergeOutcome::Conflict(paths) =
+                        wt.merge_no_ff(theirs, &sync).map_err(git_error)?
+                    {
+                        wt.reset_clean(&start).map_err(git_error)?;
+                        host.transition(task, TaskStatus::Active)?;
+                        return Err(CliError::new(
+                            TASK,
+                            format!(
+                                "[{ERROR_CODE_MERGE_CONFLICT}] local {integration_branch} \
+                                 diverged from origin with conflicts in {}; reconcile it \
+                                 and collect {id} again",
+                                paths.join(", ")
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        let tip = wt.rev_parse("HEAD").map_err(git_error)?;
+
+        let merged = match wt.merge_no_ff(&task.branch, &message).map_err(git_error)? {
+            MergeOutcome::Merged(oid) => oid,
+            MergeOutcome::Conflict(paths) => {
+                wt.reset_clean(&tip).map_err(git_error)?;
+                host.transition(task, TaskStatus::Active)?;
+                return Err(CliError::new(
+                    TASK,
+                    format!(
+                        "[{ERROR_CODE_MERGE_CONFLICT}] {id} conflicts with {integration_branch}: \
+                         {}; merge {integration_branch} into the task branch and collect again",
+                        paths.join(", "),
+                    ),
+                ));
+            }
+        };
+
+        // Validate the merge before the integration branch moves.
+        if let Err(err) = run_validation(
+            host,
+            task,
+            &config.project.promote_validate,
+            &integration,
+            "integration",
+        ) {
             wt.reset_clean(&tip).map_err(git_error)?;
             host.transition(task, TaskStatus::Active)?;
-            return Err(CliError::new(
-                TASK,
-                format!(
-                    "[{ERROR_CODE_MERGE_CONFLICT}] {id} conflicts with {}: {}; \
-                     merge {} into the task branch and collect again",
-                    config.project.integration_branch,
-                    paths.join(", "),
-                    config.project.integration_branch
-                ),
-            ));
+            return Err(err);
         }
-    };
 
-    // 5. Validate the merge before the integration branch moves.
-    if let Err(err) = run_validation(
-        host,
-        task,
-        &config.project.promote_validate,
-        &integration,
-        "integration",
-    ) {
-        wt.reset_clean(&tip).map_err(git_error)?;
-        host.transition(task, TaskStatus::Active)?;
-        return Err(err);
-    }
-    git.update_ref(
-        &integration_ref,
-        &merged,
-        Some(existing.as_deref().unwrap_or(ZERO_OID)),
-    )
-    .map_err(git_error)?;
+        let mut pushed = false;
+        if let (Some(remote), true) = (remote, remote_known) {
+            match git.push_ref_cas(remote, &integration_ref, &merged, remote_tip.as_deref()) {
+                Ok(()) => pushed = true,
+                Err(GitError::RemoteCasRejected { .. }) if attempt < MAX_PUSH_ATTEMPTS => {
+                    backoff(attempt);
+                    continue;
+                }
+                Err(GitError::RemoteCasRejected { .. }) => {
+                    wt.reset_clean(&tip).map_err(git_error)?;
+                    host.transition(task, TaskStatus::Active)?;
+                    return Err(CliError::new(
+                        TASK,
+                        format!(
+                            "[{ERROR_CODE_MERGE_CONFLICT}] {remote}/{integration_branch} kept \
+                             moving: the push of {id}'s merge lost {attempt} races; collect again"
+                        ),
+                    ));
+                }
+                Err(err) => deferred = Some(format!("push failed: {err}")),
+            }
+        }
+        git.update_ref(
+            &integration_ref,
+            &merged,
+            Some(local.as_deref().unwrap_or(ZERO_OID)),
+        )
+        .map_err(git_error)?;
+        break (merged, pushed, deferred);
+    };
     host.release_claims(task)?;
     let cleanup = if worktree.exists() {
         crate::worktree::note(&crate::worktree::remove(
@@ -231,8 +319,19 @@ fn gate<H: Host>(host: &H, task: &mut Task, message: Option<&str>) -> Result<Val
         "status": task.status,
         "integration_branch": config.project.integration_branch,
         "integration": merged,
+        "attempts": attempt,
+        "pushed": pushed,
+        "push_deferred": deferred,
         "cleanup": cleanup,
     }))
+}
+
+/// Jittered pause before retrying a lost push race.
+fn backoff(attempt: u32) {
+    let jitter = u64::try_from(crate::clock::entropy() % 50).unwrap_or(0);
+    std::thread::sleep(std::time::Duration::from_millis(
+        (10 + jitter) * u64::from(attempt),
+    ));
 }
 
 /// `.meshtree/integration` under `repo_root`.
