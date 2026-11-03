@@ -18,9 +18,9 @@
 //! therefore cached (`base`) and new events are folded onto it with
 //! [`apply`], the same step [`replay`] performs per event. That is exact
 //! whenever the new events sort after every logged event, which holds for
-//! events this daemon creates now; otherwise the full replay is used. Both
-//! use [`may_conflict`], which answers "no conflict" without the full
-//! pattern check when two patterns start with different literal segments.
+//! events this daemon creates now; otherwise the full replay is used.
+//! `conflicts_raw` answers most unrelated pairs with a fast negative, so a
+//! scan over thousands of live leases stays cheap.
 
 use crate::exit::{CliError, PLATFORM};
 use meshtree_core::lease::{
@@ -120,7 +120,7 @@ impl Leases {
                 self.last = Some((*newest).clone());
             }
         } else {
-            self.base = replay(&log, &self.config, may_conflict);
+            self.base = replay(&log, &self.config, conflicts_raw);
             self.last = log.iter().max_by(|a, b| a.total_cmp(b)).cloned();
         }
         self.ids = log.iter().map(|e| e.id.clone()).collect();
@@ -160,7 +160,7 @@ impl Leases {
             let mut all = self.log.clone();
             all.extend(self.pending.iter().cloned());
             all.extend(candidates.iter().cloned());
-            replay(&all, &self.config, may_conflict)
+            replay(&all, &self.config, conflicts_raw)
         };
         state
             .rejected
@@ -224,7 +224,7 @@ fn apply(state: &mut Replay, ev: &LeaseEvent, config: &ReplayConfig) {
             let mut holder: Option<&Lease> = None;
             for lease in state.leases.values() {
                 if lease.task == ev.task
-                    || !(lease.path == ev.path || may_conflict(&lease.path, &ev.path))
+                    || !(lease.path == ev.path || conflicts_raw(&lease.path, &ev.path))
                 {
                     continue;
                 }
@@ -293,37 +293,6 @@ fn apply(state: &mut Replay, ev: &LeaseEvent, config: &ReplayConfig) {
             }
         }
     }
-}
-
-/// [`conflicts_raw`] with a fast negative: patterns whose first segments are
-/// different literals never conflict (the rule must match the first segment
-/// before anything else, and `**` covers only what follows a segment).
-/// Anything the fast path cannot vouch for gets the full check.
-pub fn may_conflict(a: &str, b: &str) -> bool {
-    match (literal_head(a), literal_head(b)) {
-        (Some(x), Some(y)) if !x.eq_ignore_ascii_case(y) => false,
-        _ => conflicts_raw(a, b),
-    }
-}
-
-/// The first segment of `pattern` when it is a plain literal that
-/// normalization keeps as is: only `[A-Za-z0-9._-]`, not `.`/`..`/
-/// `.meshtree`, in a pattern without `..`, backslashes, `:` or spaces (those
-/// may normalize differently or fail, and a failing pattern conflicts with
-/// everything).
-fn literal_head(pattern: &str) -> Option<&str> {
-    let plain = |b: u8| b.is_ascii_alphanumeric() || b"._-/*".contains(&b);
-    if pattern.is_empty() || pattern.starts_with('/') || !pattern.bytes().all(plain) {
-        return None;
-    }
-    if pattern.split('/').any(|s| s == "." || s == "..") {
-        return None;
-    }
-    let head = pattern.split('/').next()?;
-    if head.is_empty() || head.contains('*') || head.eq_ignore_ascii_case(".meshtree") {
-        return None;
-    }
-    Some(head)
 }
 
 /// The local coordination ref's tip, read from the ref files when the
@@ -517,46 +486,6 @@ mod tests {
         // A log that is not an extension is replayed from scratch.
         l.set_log(Some("b".repeat(40)), vec![early.clone()]);
         assert_eq!(l.base, replay(&[early], &CONFIG, conflicts_raw));
-    }
-
-    #[test]
-    fn may_conflict_agrees_with_core_rule() {
-        let patterns = [
-            "src/**",
-            "src/a.rs",
-            "SRC/b/**",
-            "src",
-            "docs/**",
-            "docs/x.md",
-            "*",
-            "**",
-            "*/x",
-            "s*",
-            "sr*/a",
-            "src*",
-            "./src/a",
-            "src//a",
-            "src\\a",
-            " src ",
-            "a b/c",
-            "src/../x",
-            ".meshtree/x",
-            ".MeshTree",
-            "c:/x",
-            "seed/1/**",
-            "seed/12/**",
-            "bench/claim-1/**",
-            "x.y-z_1/q",
-            ".hidden/a",
-            "",
-            "/abs",
-            "src/",
-        ];
-        for a in patterns {
-            for b in patterns {
-                assert_eq!(may_conflict(a, b), conflicts_raw(a, b), "{a:?} vs {b:?}");
-            }
-        }
     }
 
     #[test]

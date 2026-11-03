@@ -110,11 +110,49 @@ pub fn conflicts(a: &str, b: &str) -> bool {
 /// [`conflicts`] over raw patterns (e.g. read back from a remote event log),
 /// usable directly as the [`crate::lease::replay`] predicate. A pattern that
 /// fails [`normalize`] conservatively conflicts with everything.
+///
+/// Fast negative (`ADR-0009`): when both patterns start with plain literal
+/// segments that differ (ASCII case-insensitively), no path can match both,
+/// because the intersection must match the first segment before anything
+/// else and neither side has a leading `**`. Such pairs are answered without
+/// normalizing. Anything the pre-check cannot vouch for, including patterns
+/// that would normalize differently or fail, takes the exact path, so the
+/// result is always [`exact_raw`]'s (zero false negatives, `ADR-0003`).
 pub fn conflicts_raw(a: &str, b: &str) -> bool {
+    if let (Some(x), Some(y)) = (literal_head(a), literal_head(b)) {
+        if !x.eq_ignore_ascii_case(y) {
+            return false;
+        }
+    }
+    exact_raw(a, b)
+}
+
+/// [`conflicts_raw`] without the fast negative.
+fn exact_raw(a: &str, b: &str) -> bool {
     match (normalize(a), normalize(b)) {
         (Ok(a), Ok(b)) => conflicts(&a, &b),
         _ => true,
     }
+}
+
+/// The first segment of `raw` when [`normalize`] would keep it unchanged as
+/// the first segment and succeed on the whole pattern as far as the first
+/// segment can tell: only `[A-Za-z0-9._-]`, not `.`, `..` or `.meshtree`,
+/// in a pattern made only of `[A-Za-z0-9._*/-]` with no leading `/` and no
+/// `.`/`..` segment anywhere.
+fn literal_head(raw: &str) -> Option<&str> {
+    let plain = |b: u8| b.is_ascii_alphanumeric() || b"._-/*".contains(&b);
+    if raw.is_empty() || raw.starts_with('/') || !raw.bytes().all(plain) {
+        return None;
+    }
+    if raw.split('/').any(|s| s == "." || s == "..") {
+        return None;
+    }
+    let head = raw.split('/').next()?;
+    if head.is_empty() || head.contains('*') || head.eq_ignore_ascii_case(MESHTREE_DIR) {
+        return None;
+    }
+    Some(head)
 }
 
 /// Lower-cased segments plus a trailing `**`: a claim covers its subtree.
@@ -203,6 +241,67 @@ fn chars_intersect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn fast_negative_matches_exact_rule_on_edge_cases() {
+        let patterns = [
+            "src/**",
+            "src/a.rs",
+            "SRC/b/**",
+            "src",
+            "docs/**",
+            "docs/x.md",
+            "*",
+            "**",
+            "*/x",
+            "s*",
+            "sr*/a",
+            "src*",
+            "./src/a",
+            "src//a",
+            "src\\a",
+            " src ",
+            "a b/c",
+            "src/../x",
+            ".meshtree/x",
+            ".MeshTree",
+            "c:/x",
+            "seed/1/**",
+            "seed/12/**",
+            "bench/claim-1/**",
+            "x.y-z_1/q",
+            ".hidden/a",
+            "",
+            "/abs",
+            "src/",
+            "src/.",
+            "**/src",
+            "src/**/**",
+        ];
+        for a in patterns {
+            for b in patterns {
+                assert_eq!(conflicts_raw(a, b), exact_raw(a, b), "{a:?} vs {b:?}");
+            }
+        }
+        assert!(!conflicts_raw("seed/1/**", "bench/claim-1/**"));
+        assert!(conflicts_raw("Src/a", "src/**"), "case-insensitive");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        /// The fast negative never changes the answer (ADR-0003: zero false
+        /// negatives), over patterns built from the characters that steer
+        /// normalization and matching.
+        #[test]
+        fn fast_negative_matches_exact_rule(
+            a in r"[abAB.*/\\: _-]{0,10}",
+            b in r"[abAB.*/\\: _-]{0,10}",
+        ) {
+            prop_assert_eq!(conflicts_raw(&a, &b), exact_raw(&a, &b));
+        }
+    }
 
     #[test]
     fn normalize_canonicalizes_and_rejects() {
