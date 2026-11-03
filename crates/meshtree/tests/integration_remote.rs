@@ -25,7 +25,7 @@ fn config(promote_validate: &str) -> String {
 fn clone(remote: &TempDir, promote_validate: &str) -> TempDir {
     let dir = TempDir::new();
     let out = Command::new("git")
-        .args(["clone", "-q", &remote.file_url()])
+        .args(["clone", "-q", "-b", "main", &remote.file_url()])
         .arg(dir.path())
         .output()
         .unwrap();
