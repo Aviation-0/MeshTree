@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-043 (coord-ref task registry)
-- Status: doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-02 | Claude Opus 5.5 (Windows): T-043 done (34/46). refs/meshtree/coord tasks/<id>.json registry via CoordStore::sync_with (revision-wins merge); spawn/failed spawn/abort publish. Open: merge gate + sweeper do not publish yet.
+    CI green (run 41551357771). Next: T-029.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-040 done (33/46). Queue slot lapses lease.ttl_secs after grant even with a live holder; next FIFO ticket granted at that instant. No §6 queue TTL key (ADR if wanted).
     CI green (run 41550700924). Next: T-043.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-039 done (32/46). collect pushes integration to origin with lease; lost race => refetch, replay-merge, retry (<=5) then MT-031; network failure defers push. Two-clone race test.
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
     CI green (run 41548903359). Next: T-039.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-028 done (30/46). meshtree mcp: stateless stdio JSON-RPC proxy, 11 §15 tools, [MT-xxx] isError results (MT-010 no daemon), EOF exit leaves daemon. Daemon +spawn/abort/list/commit_handoff/render methods; claim ttl_secs.
     CI green (run 41540486618). Open: §6 cap key; machine-id. Next: T-039.
-- 2026-11-02 | Claude Opus 5.5 (Mac): T-027 done (29/46). meshtree handoff (--json-file/--set) commits handoff.json+HANDOFF.md on task branch via plumbing + worktree ff-only (agent WIP kept); render-agents rewrites AGENTS.md block on change.
-  CI green (run 41509759232). Open: §6 cap key; OS machine-id unowned. Next: T-028.
