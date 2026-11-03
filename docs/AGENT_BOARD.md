@@ -8,6 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
+- Model: Claude Opus 5.5 (Windows)
+- Task: T-050 (coordination-log compaction, ADR-0010)
+- Status: doing
 - Model: Claude Opus 5.5 (Mac)
 - Task: T-042 (MCP directory listing manifest)
 - Status: doing
