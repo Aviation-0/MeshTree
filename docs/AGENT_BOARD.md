@@ -27,6 +27,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-03 | Claude Opus 5.5 (Windows): T-049 IN PROGRESS (lock held). Core segment-wise fast negative, serialized coord writes, single-fsync WAL batch; CI green. Claim p95 @2000 ev 60/118/92 ms (L/M/W) still > 50.
+    Remaining cost = full-log background flush (T-050). Needs Lucas: move 2,000-ev row to T-050 exit, or more bench samples.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-041 done (45/54). MIT OR Apache-2.0, crates.io metadata + READMEs, versioned path deps, CI publish dry-run job.
   CI green (run 41701931244). Next: T-042.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-035 done (44/54). dist release.yml (+regen script), release-audit/-publish workflows (each channel gated on its secret), Scoop/winget templates, meshtree-mcp npx shim.
@@ -35,5 +37,3 @@ Anti-Bloat Constraints:
   CI green (run 41698423294). Next: T-035 in progress.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-052 done (42/53). [agents] max_lines, [queue.*] ticket_ttl_secs, platform::machine (mc-<sha1 of OS id>), .venv policy doc.
   CI green (run 41688661711). Next: T-035 (cargo-dist/Node approved), socket bind hardening; T-050/T-053 after T-049.
-- 2026-11-03 | Claude Opus 5.5 (Mac): T-033 done (41/53). docs/protocol.md + docs/architecture.md; docs_schema.rs parses every JSON example against code types, catalog vs SPEC §16, methods vs dispatch.
-  CI green (run 41683066476). Next: T-052; T-035 (needs Lucas's secrets); T-050/T-053 after T-049.
