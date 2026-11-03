@@ -111,17 +111,23 @@ pub fn conflicts(a: &str, b: &str) -> bool {
 /// usable directly as the [`crate::lease::replay`] predicate. A pattern that
 /// fails [`normalize`] conservatively conflicts with everything.
 ///
-/// Fast negative (`ADR-0009`): when both patterns start with plain literal
-/// segments that differ (ASCII case-insensitively), no path can match both,
-/// because the intersection must match the first segment before anything
-/// else and neither side has a leading `**`. Such pairs are answered without
-/// normalizing. Anything the pre-check cannot vouch for, including patterns
-/// that would normalize differently or fail, takes the exact path, so the
-/// result is always [`exact_raw`]'s (zero false negatives, `ADR-0003`).
+/// Fast negative (`ADR-0009`): while both patterns continue with literal
+/// segments (no `*`), segment *k* of one can only match segment *k* of the
+/// other, so the first position where both are literal and differ (ASCII
+/// case-insensitively) proves no path matches both. Such pairs (`src/auth/**`
+/// vs `src/db/**`) are answered without normalizing. Everything else,
+/// including patterns that would normalize differently or fail, takes the
+/// exact path, so the result is always [`exact_raw`]'s (zero false
+/// negatives, `ADR-0003`).
 pub fn conflicts_raw(a: &str, b: &str) -> bool {
-    if let (Some(x), Some(y)) = (literal_head(a), literal_head(b)) {
-        if !x.eq_ignore_ascii_case(y) {
-            return false;
+    if let (Some(xs), Some(ys)) = (plain_segments(a), plain_segments(b)) {
+        for (x, y) in xs.zip(ys) {
+            if x.contains('*') || y.contains('*') {
+                break;
+            }
+            if !x.eq_ignore_ascii_case(y) {
+                return false;
+            }
         }
     }
     exact_raw(a, b)
@@ -135,24 +141,25 @@ fn exact_raw(a: &str, b: &str) -> bool {
     }
 }
 
-/// The first segment of `raw` when [`normalize`] would keep it unchanged as
-/// the first segment and succeed on the whole pattern as far as the first
-/// segment can tell: only `[A-Za-z0-9._-]`, not `.`, `..` or `.meshtree`,
-/// in a pattern made only of `[A-Za-z0-9._*/-]` with no leading `/` and no
-/// `.`/`..` segment anywhere.
-fn literal_head(raw: &str) -> Option<&str> {
+/// The segments [`normalize`] would produce from `raw`, up to the first
+/// wildcard at least, when that is provable from the raw text: only
+/// `[A-Za-z0-9._*/-]`, no leading `/`, no `.`/`..` segment, a first segment
+/// that is not `.meshtree`; empty segments (`a//b`, a trailing `/`) are
+/// skipped as normalization does. `None` means "take the exact path".
+fn plain_segments(raw: &str) -> Option<impl Iterator<Item = &str>> {
     let plain = |b: u8| b.is_ascii_alphanumeric() || b"._-/*".contains(&b);
     if raw.is_empty() || raw.starts_with('/') || !raw.bytes().all(plain) {
         return None;
     }
-    if raw.split('/').any(|s| s == "." || s == "..") {
+    let mut segments = raw.split('/').filter(|s| !s.is_empty()).peekable();
+    if raw.split('/').any(|s| s == "." || s == "..")
+        || segments
+            .peek()
+            .map_or(true, |head| head.eq_ignore_ascii_case(MESHTREE_DIR))
+    {
         return None;
     }
-    let head = raw.split('/').next()?;
-    if head.is_empty() || head.contains('*') || head.eq_ignore_ascii_case(MESHTREE_DIR) {
-        return None;
-    }
-    Some(head)
+    Some(segments)
 }
 
 /// Lower-cased segments plus a trailing `**`: a claim covers its subtree.
@@ -271,6 +278,16 @@ mod tests {
             "seed/12/**",
             "bench/claim-1/**",
             "x.y-z_1/q",
+            "seed/1",
+            "seed/1/x",
+            "seed/*/x",
+            "a/b/c",
+            "a/B/c/**",
+            "a/b",
+            "a//b/c",
+            "a/b/c/",
+            "src/.meshtree/x",
+            "**/**/a",
             ".hidden/a",
             "",
             "/abs",
@@ -285,6 +302,15 @@ mod tests {
             }
         }
         assert!(!conflicts_raw("seed/1/**", "bench/claim-1/**"));
+        assert!(
+            !conflicts_raw("seed/1/**", "seed/12/**"),
+            "second segment differs"
+        );
+        assert!(conflicts_raw("seed/1", "seed/1/x"), "directory prefix");
+        assert!(
+            conflicts_raw("seed/*/x", "seed/1/x"),
+            "wildcard: exact path"
+        );
         assert!(conflicts_raw("Src/a", "src/**"), "case-insensitive");
     }
 
