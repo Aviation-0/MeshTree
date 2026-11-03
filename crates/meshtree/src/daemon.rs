@@ -87,10 +87,7 @@ use std::time::Instant;
 
 /// How long acknowledged lease events wait before the writer commits them
 /// (`SPEC.md` §9: at most 250 ms), so a burst of claims shares one commit.
-/// Each commit replays the whole log in the background (until `T-050`'s
-/// compaction), so batching keeps that work from competing with claims;
-/// 150 ms leaves headroom under the 250 ms bound for the writer's tick.
-const COALESCE: Duration = Duration::from_millis(150);
+const COALESCE: Duration = Duration::from_millis(25);
 
 /// Writer thread polling interval.
 const WRITER_TICK: Duration = Duration::from_millis(10);
@@ -380,7 +377,8 @@ struct Daemon {
     unpublished: Mutex<Vec<Task>>,
     /// In-memory lease state for claim decisions (`ADR-0009`).
     leases: Mutex<Leases>,
-    /// Serializes commits of pending lease events.
+    /// Serializes every coordination-ref write the daemon makes: commits of
+    /// pending lease events and direct writes ([`Daemon::coord_write`]).
     flush_lock: Mutex<()>,
     /// Wait before committing acknowledged events ([`COALESCE`]).
     flush_delay: Duration,
@@ -646,7 +644,7 @@ impl Daemon {
             },
         };
         let mut inner = self.lock();
-        let report = spawn::run(&self.repo_root, args)?;
+        let report = self.coord_write(|| spawn::run(&self.repo_root, args))?;
         let task = &report.task;
         inner.ensure_journaled(task)?;
         if !task.claims.is_empty() {
@@ -671,7 +669,7 @@ impl Daemon {
         let mut inner = self.lock();
         let before = registry::read_task(&self.repo_root, &id)?;
         inner.ensure_journaled(&before)?;
-        let (task, note) = abort::run(&self.repo_root, id.as_str())?;
+        let (task, note) = self.coord_write(|| abort::run(&self.repo_root, id.as_str()))?;
         if !before.claims.is_empty() {
             inner.journal(WalOp::Release {
                 task: task.id.clone(),
@@ -799,7 +797,9 @@ impl Daemon {
             self.config.lease.ttl_secs,
         );
         for task in tasks.iter().filter(|t| plan.heartbeat.contains(&t.id)) {
-            match claims::heartbeat(&self.repo_root, &self.config, &task.id, &task.claims) {
+            match self.coord_write(|| {
+                claims::heartbeat(&self.repo_root, &self.config, &task.id, &task.claims)
+            }) {
                 Ok(outcome) if outcome.deferred.is_some() => {
                     self.dirty.store(true, Ordering::SeqCst)
                 }
@@ -818,7 +818,9 @@ impl Daemon {
     fn abandon(&self, inner: &mut Inner, mut task: Task) -> Result<(), CliError> {
         inner.ensure_journaled(&task)?;
         if !task.claims.is_empty() {
-            claims::release(&self.repo_root, &self.config, &task.id, &task.claims)?;
+            self.coord_write(|| {
+                claims::release(&self.repo_root, &self.config, &task.id, &task.claims)
+            })?;
             inner.journal(WalOp::Release {
                 task: task.id.clone(),
                 paths: std::mem::take(&mut task.claims),
@@ -851,7 +853,9 @@ impl Daemon {
                 .push(task.clone());
             return;
         }
-        if let Some(note) = claims::publish_task(&self.repo_root, &self.config, task) {
+        if let Some(note) =
+            self.coord_write(|| claims::publish_task(&self.repo_root, &self.config, task))
+        {
             note!("{}: {note}", task.id);
             self.dirty.store(true, Ordering::SeqCst);
         }
@@ -873,6 +877,19 @@ impl Daemon {
         for task in &tasks {
             self.publish(task);
         }
+    }
+
+    /// Runs a direct coordination-ref write (registry publish, heartbeat,
+    /// merge-gate release, in-process spawn/abort) under the writer's
+    /// `flush_lock`, so the daemon's own commits never race each other's
+    /// local and remote CAS. Callers may hold the operation mutex (lock
+    /// order: operation mutex, then `flush_lock`).
+    fn coord_write<T>(&self, write: impl FnOnce() -> T) -> T {
+        let _writing = self
+            .flush_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        write()
     }
 
     fn leases(&self) -> std::sync::MutexGuard<'_, Leases> {
@@ -1144,7 +1161,9 @@ impl merge_gate::Host for Daemon {
         }
         let mut inner = self.lock();
         inner.ensure_journaled(task)?;
-        let outcome = claims::release(&self.repo_root, &self.config, &task.id, &task.claims)?;
+        let outcome = self.coord_write(|| {
+            claims::release(&self.repo_root, &self.config, &task.id, &task.claims)
+        })?;
         if outcome.deferred.is_some() {
             self.dirty.store(true, Ordering::SeqCst);
         }
