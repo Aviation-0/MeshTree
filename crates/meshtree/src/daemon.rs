@@ -25,6 +25,14 @@
 //! running; when no daemon is reachable the CLI performs the same operation
 //! in-process, arbitrated by the coordination-ref CAS (`T-014`).
 //!
+//! In the daemon a claim is decided in memory ([`leases`], `ADR-0009`): the
+//! lease events are journaled to the WAL, the answer goes out, and a writer
+//! thread commits pending events to `refs/meshtree/coord` within
+//! [`COALESCE`] (and pushes them). Everything that reads the ref for a
+//! decision (`sync`, `collect`, heartbeats, shutdown) flushes first; a
+//! remote winner found by a later flush revokes the claim (`MT-001`).
+//! Recovery re-queues journaled events missing from the ref.
+//!
 //! The methods are the §15 MCP tools (`meshtree mcp` proxies each one here),
 //! plus `ping`, `heartbeat`, `ticket_status`, `release_shared_op`,
 //! `queue_status` and `shutdown`.
@@ -68,7 +76,25 @@ macro_rules! note {
     }};
 }
 
+mod leases;
 mod recovery;
+
+use leases::Leases;
+use meshtree_core::lease::{EventType, LeaseEvent};
+use meshtree_platform::coord::{CoordStore, SyncOutcome};
+use meshtree_platform::gitops::CliGitOps;
+use std::time::Instant;
+
+/// How long acknowledged lease events wait before the writer commits them
+/// (`SPEC.md` §9: at most 250 ms), so a burst of claims shares one commit.
+const COALESCE: Duration = Duration::from_millis(25);
+
+/// Writer thread polling interval.
+const WRITER_TICK: Duration = Duration::from_millis(10);
+
+/// Test hook: overrides [`COALESCE`] (milliseconds) so a test can kill the
+/// daemon between acknowledging a claim and committing it.
+const FLUSH_DELAY_ENV: &str = "MESHTREE_TEST_FLUSH_DELAY_MS";
 
 /// How often a deferred coordination push is retried.
 const FLUSH_EVERY_SECS: u64 = 5;
@@ -101,6 +127,15 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         note!("WAL recovery: {torn}");
     }
     let state = replay(&opened.entries);
+    let journaled: Vec<LeaseEvent> = opened
+        .entries
+        .iter()
+        .filter_map(|e| match &e.op {
+            WalOp::Events { events, .. } => Some(events.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     for anomaly in &state.anomalies {
         note!("WAL entry {} skipped: {}", anomaly.seq, anomaly.message);
     }
@@ -110,6 +145,12 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
 
     let started_ms = clock::now_unix_ms();
     let ticket_ttl_ms = config.lease.ttl_secs.saturating_mul(1000);
+    let flush_delay = std::env::var(FLUSH_DELAY_ENV)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(COALESCE);
+    let leases = Leases::new(&repo_root, claims::replay_config(&config));
     let daemon = Arc::new(Daemon {
         repo_root,
         config,
@@ -131,11 +172,23 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         shutdown: AtomicBool::new(false),
         recovering: AtomicBool::new(true),
         unpublished: Mutex::new(Vec::new()),
+        leases: Mutex::new(leases),
+        flush_lock: Mutex::new(()),
+        flush_delay,
+        last_flush_wait_ms: AtomicU64::new(0),
+        last_flush_ms: AtomicU64::new(0),
     });
 
     // Recover before accepting clients (§10 Crash safety).
     let recovery_start = std::time::Instant::now();
     let recovered = daemon.recover(&state);
+    match daemon.recover_leases(journaled) {
+        Ok(0) => {}
+        Ok(n) => {
+            note!("recovery: re-queued {n} acknowledged lease event(s) for the coordination ref")
+        }
+        Err(err) => note!("lease recovery incomplete: {}", err.message),
+    }
     daemon.recovery_ms.store(
         u64::try_from(recovery_start.elapsed().as_millis()).unwrap_or(u64::MAX),
         Ordering::SeqCst,
@@ -166,9 +219,12 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
         endpoint.path().display()
     );
     daemon.publish_recovered();
+    let writer = {
+        let daemon = Arc::clone(&daemon);
+        std::thread::spawn(move || daemon.writer())
+    };
 
     let mut last_beat = started_ms;
-    let mut last_flush = started_ms;
     while !daemon.shutdown.load(Ordering::SeqCst) {
         std::thread::sleep(TICK);
         let now = clock::now_unix_ms();
@@ -176,11 +232,9 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
             last_beat = now;
             daemon.supervise(now);
         }
-        if daemon.dirty.load(Ordering::SeqCst) && due(last_flush, now, FLUSH_EVERY_SECS) {
-            last_flush = now;
-            daemon.flush();
-        }
     }
+    // The writer commits whatever is still pending before it exits.
+    let _ = writer.join();
     say!("meshtree daemon {} stopped", std::process::id());
     drop(acquired);
     Ok(())
@@ -312,6 +366,16 @@ struct Daemon {
     /// `unpublished` so pushes cannot delay recovery (§10: < 2 s).
     recovering: AtomicBool,
     unpublished: Mutex<Vec<Task>>,
+    /// In-memory lease state for claim decisions (`ADR-0009`).
+    leases: Mutex<Leases>,
+    /// Serializes commits of pending lease events.
+    flush_lock: Mutex<()>,
+    /// Wait before committing acknowledged events ([`COALESCE`]).
+    flush_delay: Duration,
+    /// Last commit of acknowledged events: how long the oldest waited before
+    /// the commit started, and how long the commit took (reported by `ping`).
+    last_flush_wait_ms: AtomicU64,
+    last_flush_ms: AtomicU64,
 }
 
 /// Local FIFO queues, created on first use from `[queue.<name>]`.
@@ -432,41 +496,12 @@ impl Daemon {
             "ping" => Ok(json!({
                 "pid": std::process::id(),
                 "recovery_ms": self.recovery_ms.load(Ordering::SeqCst),
+                "pending_events": self.leases().pending().len(),
+                "last_flush_wait_ms": self.last_flush_wait_ms.load(Ordering::SeqCst),
+                "last_flush_ms": self.last_flush_ms.load(Ordering::SeqCst),
             })),
-            "claim_paths" | "release_paths" => {
-                let raw_id = str_param(params, "task_id")?;
-                let paths = paths_param(params)?;
-                let ttl_secs = match params.get("ttl_secs") {
-                    None | Some(Value::Null) => None,
-                    Some(v) => Some(v.as_u64().filter(|&t| t > 0).ok_or_else(|| {
-                        CliError::new(USAGE, "'ttl_secs' must be a positive integer")
-                    })?),
-                };
-                let mut inner = self.lock();
-                let (task, report) = if method == "claim_paths" {
-                    claims::claim_in(&self.repo_root, &self.config, &raw_id, &paths, ttl_secs)?
-                } else {
-                    claims::release_in(&self.repo_root, &self.config, &raw_id, &paths)?
-                };
-                inner.ensure_journaled(&task)?;
-                let paths = report.paths.clone();
-                inner.journal(if method == "claim_paths" {
-                    WalOp::Claim {
-                        task: task.id.clone(),
-                        paths,
-                    }
-                } else {
-                    WalOp::Release {
-                        task: task.id.clone(),
-                        paths,
-                    }
-                })?;
-                inner.touch(&task.id);
-                if report.deferred.is_some() {
-                    self.dirty.store(true, Ordering::SeqCst);
-                }
-                Ok(report.to_json())
-            }
+            "claim_paths" => self.claim_or_release(true, params),
+            "release_paths" => self.claim_or_release(false, params),
             "heartbeat" => {
                 let id = task_id_param(params)?;
                 let task = registry::read_task(&self.repo_root, &id)?;
@@ -522,10 +557,7 @@ impl Daemon {
                 Ok(rendered_json(&agents::render(&self.repo_root)?))
             }
             "sync" => {
-                let _inner = self.lock();
-                let (outcome, revoked) = claims::sync_in(&self.repo_root, &self.config)?;
-                self.dirty
-                    .store(outcome.deferred.is_some(), Ordering::SeqCst);
+                let (outcome, revoked) = self.flush_and_revoke()?;
                 Ok(json!({
                     "coord": claims::push_status(&outcome),
                     "leases": outcome.replay.leases.len(),
@@ -537,6 +569,8 @@ impl Daemon {
             "request_shared_op" => self.request_shared_op(params),
             "collect_task" => {
                 let raw_id = str_param(params, "task_id")?;
+                // The claim check reads the ref: commit acknowledged claims first.
+                self.flush_and_revoke()?;
                 let message = params.get("message").and_then(Value::as_str);
                 merge_gate::collect(self, &raw_id, message)
             }
@@ -718,6 +752,12 @@ impl Daemon {
     /// One supervisor pass: heartbeat live claims, abandon silent tasks,
     /// retry quarantined trees (§10 step 4, idle GC).
     fn supervise(&self, now_ms: u64) {
+        // Heartbeats and sweeps read the ref: commit acknowledged claims first.
+        if self.leases().waiting().is_some() {
+            if let Err(err) = self.flush_and_revoke() {
+                note!("coordination flush: {}", err.message);
+            }
+        }
         let gc = gc_quarantine(&crate::worktree::quarantine_dir(&self.repo_root));
         for path in &gc.removed {
             note!("quarantine GC removed {}", path.display());
@@ -814,15 +854,197 @@ impl Daemon {
         }
     }
 
-    /// Retries a deferred coordination push.
-    fn flush(&self) {
-        let _inner = self.lock();
-        match claims::sync_in(&self.repo_root, &self.config) {
-            Ok((outcome, _)) => self
-                .dirty
-                .store(outcome.deferred.is_some(), Ordering::SeqCst),
-            Err(err) => note!("flush: {}", err.message),
+    fn leases(&self) -> std::sync::MutexGuard<'_, Leases> {
+        self.leases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A store that only reads the local ref (no `remote_url` lookup).
+    fn reader(&self) -> CoordStore<CliGitOps> {
+        CoordStore::new(
+            CliGitOps::new(&self.repo_root),
+            None,
+            claims::replay_config(&self.config),
+        )
+    }
+
+    /// `claim_paths` / `release_paths` (§9 daemon claim path, `ADR-0009`):
+    /// decided against the in-memory replay, journaled, acknowledged; the
+    /// writer commits later. `sync: true` commits and pushes before answering.
+    fn claim_or_release(&self, claim: bool, params: &Value) -> Result<Value, CliError> {
+        let raw_id = str_param(params, "task_id")?;
+        let paths = claims::normalize_all(&paths_param(params)?)?;
+        let ttl_secs =
+            match params.get("ttl_secs") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(v.as_u64().filter(|&t| t > 0).ok_or_else(|| {
+                    CliError::new(USAGE, "'ttl_secs' must be a positive integer")
+                })?),
+            };
+        let sync = params.get("sync").and_then(Value::as_bool).unwrap_or(false);
+
+        let mut inner = self.lock();
+        let mut task = claims::active_task(&self.repo_root, &raw_id)?;
+        let (kind, ttl) = if claim {
+            (
+                EventType::Acquire,
+                ttl_secs.unwrap_or(self.config.lease.ttl_secs),
+            )
+        } else {
+            (EventType::Release, 0)
+        };
+        let batch = claims::events(kind, &task.id, &paths, &machine_id(&self.config), ttl);
+        {
+            let mut leases = self.leases();
+            leases.refresh(&self.reader())?;
+            if claim {
+                let rejected = leases.decide(&batch);
+                if !rejected.is_empty() {
+                    return Err(claims::conflict_error(&rejected.iter().collect::<Vec<_>>()));
+                }
+            }
+            // Journaled before the answer: an acknowledged claim survives a crash.
+            inner.ensure_journaled(&task)?;
+            inner.journal(WalOp::Events {
+                task: task.id.clone(),
+                events: batch.clone(),
+            })?;
+            inner.journal(if claim {
+                WalOp::Claim {
+                    task: task.id.clone(),
+                    paths: paths.clone(),
+                }
+            } else {
+                WalOp::Release {
+                    task: task.id.clone(),
+                    paths: paths.clone(),
+                }
+            })?;
+            leases.accept(batch);
         }
+        if claim {
+            for path in &paths {
+                if !task.claims.contains(path) {
+                    task.claims.push(path.clone());
+                }
+            }
+        } else {
+            task.claims.retain(|c| !paths.contains(c));
+        }
+        registry::write_task(&self.repo_root, &task)?;
+        inner.touch(&task.id);
+
+        if !sync {
+            return Ok(json!({ "paths": paths, "coord": "pending", "deferred": null }));
+        }
+        let outcome = self.flush_now()?;
+        let revoked = claims::revoke_rejected(&self.repo_root, &outcome)?;
+        let lost: Vec<String> = revoked
+            .iter()
+            .filter(|r| r.task == task.id && paths.contains(&r.path))
+            .map(|r| format!("{} held by {}", r.path, r.holder))
+            .collect();
+        if claim && !lost.is_empty() {
+            return Err(CliError::new(
+                TASK,
+                format!(
+                    "[{}] claim conflict on sync: {}; claim revoked",
+                    meshtree_core::ERROR_CODE_CLAIM_CONFLICT,
+                    lost.join("; ")
+                ),
+            ));
+        }
+        Ok(json!({
+            "paths": paths,
+            "coord": if outcome.pushed { "pushed" } else { "committed" },
+            "deferred": outcome.deferred,
+        }))
+    }
+
+    /// Commits the pending lease events (and fetches/pushes), then reloads
+    /// the in-memory log from the new tip. Does not take the operation mutex.
+    fn flush_now(&self) -> Result<SyncOutcome, CliError> {
+        let _flushing = self
+            .flush_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (batch, waited) = {
+            let leases = self.leases();
+            (leases.pending(), leases.waiting())
+        };
+        let started = Instant::now();
+        let store = claims::store(&self.repo_root, &self.config)?;
+        let outcome = store.sync(&batch).map_err(claims::coord_error)?;
+        let (log, _) = store
+            .read_log(&outcome.oid)
+            .map_err(|err| CliError::new(PLATFORM, err.to_string()))?;
+        self.leases().flushed(outcome.oid.clone(), log);
+        self.dirty
+            .store(outcome.deferred.is_some(), Ordering::SeqCst);
+        if let Some(waited) = waited {
+            let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+            self.last_flush_wait_ms.store(ms(waited), Ordering::SeqCst);
+            self.last_flush_ms
+                .store(ms(started.elapsed()), Ordering::SeqCst);
+        }
+        Ok(outcome)
+    }
+
+    /// [`Daemon::flush_now`], then revokes local claims a remote winner
+    /// took (§9). Takes the operation mutex for the revocation.
+    fn flush_and_revoke(&self) -> Result<(SyncOutcome, Vec<claims::Revocation>), CliError> {
+        let outcome = self.flush_now()?;
+        let revoked = {
+            let _inner = self.lock();
+            claims::revoke_rejected(&self.repo_root, &outcome)?
+        };
+        for r in &revoked {
+            note!(
+                "[{}] {} lost {} to {}; claim revoked",
+                meshtree_core::ERROR_CODE_CLAIM_CONFLICT,
+                r.task,
+                r.path,
+                r.holder
+            );
+        }
+        Ok((outcome, revoked))
+    }
+
+    /// Writer thread: commits acknowledged events after [`COALESCE`],
+    /// fetches every `heartbeat_secs / 4` (at most 30 s), retries deferred
+    /// pushes, and commits what is left at shutdown.
+    fn writer(&self) {
+        let fetch_every = Duration::from_secs((self.config.lease.heartbeat_secs / 4).clamp(1, 30));
+        let retry_every = Duration::from_secs(FLUSH_EVERY_SECS);
+        let mut last = Instant::now();
+        loop {
+            let stopping = self.shutdown.load(Ordering::SeqCst);
+            let waiting = self.leases().waiting();
+            let due = waiting.is_some_and(|w| w >= self.flush_delay || stopping)
+                || (!stopping && last.elapsed() >= fetch_every)
+                || (!stopping
+                    && self.dirty.load(Ordering::SeqCst)
+                    && last.elapsed() >= retry_every);
+            if due {
+                last = Instant::now();
+                if let Err(err) = self.flush_and_revoke() {
+                    note!("coordination flush: {}", err.message);
+                }
+            }
+            if stopping {
+                return;
+            }
+            std::thread::sleep(WRITER_TICK);
+        }
+    }
+
+    /// Loads the in-memory log and re-queues journaled lease events the ref
+    /// lacks (§10 Crash safety). Returns how many were re-queued.
+    fn recover_leases(&self, journaled: Vec<LeaseEvent>) -> Result<usize, CliError> {
+        let mut leases = self.leases();
+        leases.refresh(&self.reader())?;
+        Ok(leases.recover(journaled))
     }
 }
 

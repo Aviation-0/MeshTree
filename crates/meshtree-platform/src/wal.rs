@@ -66,6 +66,14 @@ pub enum WalOp {
     Claim { task: TaskId, paths: Vec<String> },
     /// Claims released by a task.
     Release { task: TaskId, paths: Vec<String> },
+    /// The lease events of an acknowledged claim or release, journaled
+    /// before the daemon answers (`SPEC.md` §10, `ADR-0009`): recovery
+    /// re-applies those missing from `refs/meshtree/coord`. Does not change
+    /// the replayed task state ([`WalOp::Claim`] / [`WalOp::Release`] do).
+    Events {
+        task: TaskId,
+        events: Vec<meshtree_core::lease::LeaseEvent>,
+    },
 }
 
 impl WalOp {
@@ -75,7 +83,8 @@ impl WalOp {
             WalOp::Spawn { task, .. }
             | WalOp::Transition { task, .. }
             | WalOp::Claim { task, .. }
-            | WalOp::Release { task, .. } => task,
+            | WalOp::Release { task, .. }
+            | WalOp::Events { task, .. } => task,
         }
     }
 }
@@ -466,6 +475,7 @@ fn apply(state: &mut WalState, entry: &WalEntry) -> Result<(), String> {
                 task.claims.remove(p);
             }
         }
+        WalOp::Events { .. } => {}
     }
     task.last_seq = entry.seq;
     task.updated_ms = entry.at_ms;

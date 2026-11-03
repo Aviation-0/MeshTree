@@ -45,14 +45,33 @@ pub fn store(repo_root: &Path, config: &Config) -> Result<CoordStore<CliGitOps>,
         .remote_url(REMOTE)
         .map_err(|err| CliError::new(PLATFORM, err.to_string()))?
         .map(|_| REMOTE.to_string());
-    let replay = ReplayConfig {
-        default_ttl_secs: config.lease.ttl_secs,
-        skew_grace_secs: config.lease.skew_grace_secs,
-    };
-    Ok(CoordStore::new(git, remote, replay))
+    Ok(CoordStore::new(git, remote, replay_config(config)))
 }
 
-fn coord_error(err: CoordError) -> CliError {
+/// Lease replay parameters from `[lease]`.
+pub fn replay_config(config: &Config) -> ReplayConfig {
+    ReplayConfig {
+        default_ttl_secs: config.lease.ttl_secs,
+        skew_grace_secs: config.lease.skew_grace_secs,
+    }
+}
+
+/// The `MT-001` error for rejected claims.
+pub(crate) fn conflict_error(rejected: &[&meshtree_core::Rejection]) -> CliError {
+    let detail: Vec<String> = rejected
+        .iter()
+        .map(|r| format!("{} held by {} ({})", r.path, r.holder, r.holder_path))
+        .collect();
+    CliError::new(
+        TASK,
+        format!(
+            "[{ERROR_CODE_CLAIM_CONFLICT}] claim conflict: {}",
+            detail.join("; ")
+        ),
+    )
+}
+
+pub(crate) fn coord_error(err: CoordError) -> CliError {
     match err.code() {
         Some(_) => CliError::new(TASK, err.to_string()),
         None => CliError::new(PLATFORM, err.to_string()),
@@ -62,7 +81,7 @@ fn coord_error(err: CoordError) -> CliError {
 /// One event per path with fresh ULID ids. `counter` is the wall clock in
 /// nanoseconds plus the batch index, so a rollback `RELEASE` always orders
 /// after the `ACQUIRE` it undoes even within the same millisecond (§9 key).
-fn events(
+pub(crate) fn events(
     kind: EventType,
     task: &TaskId,
     paths: &[String],
@@ -129,17 +148,7 @@ pub fn acquire(
         let undo = events(EventType::Release, task, &granted, &machine, 0);
         store.sync(&undo).map_err(coord_error)?;
     }
-    let detail: Vec<String> = rejected
-        .iter()
-        .map(|r| format!("{} held by {} ({})", r.path, r.holder, r.holder_path))
-        .collect();
-    Err(CliError::new(
-        TASK,
-        format!(
-            "[{ERROR_CODE_CLAIM_CONFLICT}] claim conflict: {}",
-            detail.join("; ")
-        ),
-    ))
+    Err(conflict_error(&rejected))
 }
 
 /// Releases `paths` held by `task`.
@@ -155,7 +164,7 @@ pub fn release(
 }
 
 /// Loads an `active` task for a claim operation.
-fn active_task(repo_root: &Path, raw_id: &str) -> Result<Task, CliError> {
+pub(crate) fn active_task(repo_root: &Path, raw_id: &str) -> Result<Task, CliError> {
     let id = TaskId::parse(raw_id)
         .ok_or_else(|| CliError::new(USAGE, format!("'{raw_id}' is not a task id")))?;
     let task = registry::read_task(repo_root, &id)?;
@@ -171,13 +180,14 @@ fn active_task(repo_root: &Path, raw_id: &str) -> Result<Task, CliError> {
     Ok(task)
 }
 
-/// Result of a claim command, for printing (also the daemon's
+/// Result of a claim command, for printing (also the shape of the daemon's
 /// `claim_paths` / `release_paths` result).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     /// Normalized paths acted on.
     pub paths: Vec<String>,
-    /// One-line coordination status ([`push_status`]).
+    /// Coordination status: [`push_status`] in-process; from a daemon
+    /// `pending`, `committed` or `pushed` (`ADR-0009`).
     pub coord: String,
     /// Why the push was deferred, if it was.
     pub deferred: Option<String>,
@@ -192,16 +202,7 @@ impl Report {
         }
     }
 
-    /// Wire form for the daemon IPC.
-    pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "paths": self.paths,
-            "coord": self.coord,
-            "deferred": self.deferred,
-        })
-    }
-
-    /// Parses [`Report::to_json`] output.
+    /// Parses the daemon's `{paths, coord, deferred}` result.
     pub fn from_json(value: &serde_json::Value) -> Result<Self, CliError> {
         let bad = || CliError::new(DAEMON, format!("malformed daemon claim result: {value}"));
         let paths = value["paths"]
@@ -219,10 +220,11 @@ impl Report {
 }
 
 /// `meshtree claim <task-id> <glob>…`: through the daemon when one is
-/// running, else in-process.
-pub fn claim(cwd: &Path, raw_id: &str, globs: &[String]) -> Result<Report, CliError> {
+/// running (`sync`: wait for the commit and push), else in-process (always
+/// synchronous).
+pub fn claim(cwd: &Path, raw_id: &str, globs: &[String], sync: bool) -> Result<Report, CliError> {
     let repo_root = require_repo_root(cwd)?;
-    let params = serde_json::json!({ "task_id": raw_id, "paths": globs });
+    let params = serde_json::json!({ "task_id": raw_id, "paths": globs, "sync": sync });
     if let Some(result) = daemon::call(&repo_root, "claim_paths", params) {
         return Report::from_json(&result?);
     }
@@ -346,10 +348,19 @@ pub fn sync_in(
     repo_root: &Path,
     config: &Config,
 ) -> Result<(SyncOutcome, Vec<Revocation>), CliError> {
-    let repo_root = repo_root.to_path_buf();
-    let outcome = store(&repo_root, config)?.sync(&[]).map_err(coord_error)?;
+    let outcome = store(repo_root, config)?.sync(&[]).map_err(coord_error)?;
+    let revoked = revoke_rejected(repo_root, &outcome)?;
+    Ok((outcome, revoked))
+}
+
+/// Drops from `task.json` every local claim that `outcome`'s replay now
+/// rejects in favor of another task (§9: a remote winner revokes it).
+pub fn revoke_rejected(
+    repo_root: &Path,
+    outcome: &SyncOutcome,
+) -> Result<Vec<Revocation>, CliError> {
     let mut revoked = Vec::new();
-    for mut task in registry::list_tasks(&repo_root)?.tasks {
+    for mut task in registry::list_tasks(repo_root)?.tasks {
         let lost: Vec<&meshtree_core::Rejection> = outcome
             .replay
             .rejected
@@ -370,9 +381,9 @@ pub fn sync_in(
             });
         }
         task.claims.retain(|c| !lost.iter().any(|r| &r.path == c));
-        registry::write_task(&repo_root, &task)?;
+        registry::write_task(repo_root, &task)?;
     }
-    Ok((outcome, revoked))
+    Ok(revoked)
 }
 
 /// One-line push status for stdout.

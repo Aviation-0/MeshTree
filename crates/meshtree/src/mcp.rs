@@ -182,6 +182,7 @@ fn call_tool(name: &str, args: Map<String, Value>, cwd: &Path) -> Result<Value, 
         // structuredContent must be an object.
         "list_tasks" => json!({ "tasks": result }),
         "task_status" if result.is_array() => json!({ "tasks": result }),
+        // `coord`: pending | committed | pushed (§15, ADR-0009).
         "claim_paths" => json!({
             "granted": result["paths"],
             "rejected": [],
@@ -294,6 +295,7 @@ const TOOLS: [Tool; 11] = [
                     "task_id": string("Task id"),
                     "paths": strings("Path patterns"),
                     "ttl_secs": { "type": "integer", "minimum": 1, "description": "Lease TTL (default: lease.ttl_secs)" },
+                    "sync": { "type": "boolean", "description": "Answer only after the claim is committed and pushed (default: acknowledged from the daemon's memory, committed within 250 ms)" },
                 }),
                 &["task_id", "paths"],
             )

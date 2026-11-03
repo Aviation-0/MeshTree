@@ -68,6 +68,10 @@ enum Command {
         /// Path patterns
         #[arg(required = true, value_name = "GLOB")]
         globs: Vec<String>,
+        /// With a daemon: answer only after the claim is committed and pushed
+        /// (remote conflicts reported up front)
+        #[arg(long)]
+        sync: bool,
     },
     /// Release path claims held by an active task
     Release {
@@ -246,8 +250,12 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
             Ok(())
         }
-        Some(Command::Claim { task_id, globs }) => {
-            let report = claims::claim(&current_dir()?, &task_id, &globs)?;
+        Some(Command::Claim {
+            task_id,
+            globs,
+            sync,
+        }) => {
+            let report = claims::claim(&current_dir()?, &task_id, &globs, sync)?;
             print_claim_report("claimed", &report);
             Ok(())
         }
