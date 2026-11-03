@@ -8,6 +8,7 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 - **In-Progress Task (`doing`):** None
 - **Next Up (`todo`, dependencies satisfied):**
   1. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; gates `T-030`) (`docs/mvp-acceptance.md`)
+  2. `T-049` — Daemon in-memory claim decisions, WAL-journaled events, background commit (`ADR-0009` Part 2) (`crates/meshtree` + `platform::wal`)
 - **Latest (2026-11-02, Claude Opus 5.5, Windows):** `T-048` done (38/49) — coordination sync runs a constant ~10 git processes regardless of log length (batched reads/writes, blob reuse); small-log claims 2–4× faster, but claim time still grows with the log (in-process O(log) work), which `T-049` moves off the claim path; CI run 41561529557 green on all 3 OSes.
 - **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-047` done (37/49) — every daemon-driven status change (collect edges, recovery, `ttl × 4` sweeper) now reaches the coordination-ref task registry; recovery publishes wait until the daemon serves; CI run 41559983307 green on all 3 OSes.
 - **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-034` done (36/47) — `xtask bench` for all six §18 scenarios with baselines; `docs/benchmarks.md` holds 3-OS smoke results (CI run 41557533637); local claim p95 misses the 50 ms target on every OS (synchronous git subprocesses per claim) — needs a design decision; full-scale run pending on the Mac.
