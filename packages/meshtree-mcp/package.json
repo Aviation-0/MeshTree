@@ -2,6 +2,7 @@
   "name": "meshtree-mcp",
   "version": "0.1.0",
   "description": "npx launcher for the MeshTree MCP server (`meshtree mcp`, stdio)",
+  "license": "MIT OR Apache-2.0",
   "homepage": "https://github.com/Aviation-0/MeshTree",
   "repository": {
     "type": "git",

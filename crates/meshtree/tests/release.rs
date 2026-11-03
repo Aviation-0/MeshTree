@@ -196,6 +196,7 @@ fn release_workflow_is_wired() {
     ));
     let package: Value = serde_json::from_str(&read("packages/meshtree-mcp/package.json")).unwrap();
     assert_eq!(package["name"], "meshtree-mcp");
+    assert_eq!(package["license"], "MIT OR Apache-2.0");
     assert_eq!(package["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(package["bin"]["meshtree-mcp"], "bin/meshtree-mcp.js");
 

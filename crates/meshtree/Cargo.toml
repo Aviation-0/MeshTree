@@ -4,8 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Coordinate parallel AI coding agents across git worktrees and machines"
-repository = "https://github.com/Aviation-0/MeshTree"
-homepage = "https://github.com/Aviation-0/MeshTree"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["ai-agents", "git-worktree", "mcp", "coordination", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "meshtree"

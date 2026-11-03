@@ -46,3 +46,13 @@ jobs:
           tool: cargo-llvm-cov
       - name: Enforce meshtree-core line coverage (SPEC §18, §22)
         run: cargo llvm-cov -p meshtree-core --summary-only --fail-under-lines 85
+
+  publish-dry-run:
+    name: crates.io publish dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Package and verify meshtree-core, meshtree-platform, meshtree in dependency order (SPEC §19)
+        run: cargo publish --dry-run --workspace --locked

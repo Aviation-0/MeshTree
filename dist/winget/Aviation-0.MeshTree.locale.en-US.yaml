@@ -5,7 +5,7 @@ PackageLocale: en-US
 Publisher: Aviation-0
 PackageName: MeshTree
 PackageUrl: https://github.com/Aviation-0/MeshTree
-License: Unknown
+License: MIT OR Apache-2.0
 ShortDescription: Coordinate parallel AI coding agents across git worktrees and machines
 Moniker: meshtree
 ManifestType: defaultLocale

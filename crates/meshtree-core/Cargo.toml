@@ -3,6 +3,11 @@ name = "meshtree-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Pure, deterministic core of MeshTree: task model, lease replay, path-pattern conflicts, queue and handoff logic"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true }

@@ -3,6 +3,11 @@ name = "meshtree-platform"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Platform layer of MeshTree: git plumbing, coordination-ref sync, daemon IPC, locks, WAL, teardown and dependency sharing"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
 
 [dependencies]
 meshtree-core.workspace = true

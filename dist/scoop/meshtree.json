@@ -2,7 +2,7 @@
     "version": "{{VERSION}}",
     "description": "Coordinate parallel AI coding agents across git worktrees and machines",
     "homepage": "https://github.com/Aviation-0/MeshTree",
-    "license": "Unknown",
+    "license": "MIT|Apache-2.0",
     "architecture": {
         "64bit": {
             "url": "https://github.com/Aviation-0/MeshTree/releases/download/v{{VERSION}}/meshtree-x86_64-pc-windows-msvc.zip",
