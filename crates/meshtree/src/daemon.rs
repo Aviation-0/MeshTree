@@ -87,7 +87,10 @@ use std::time::Instant;
 
 /// How long acknowledged lease events wait before the writer commits them
 /// (`SPEC.md` §9: at most 250 ms), so a burst of claims shares one commit.
-const COALESCE: Duration = Duration::from_millis(25);
+/// Each commit replays the whole log in the background (until `T-050`'s
+/// compaction), so batching keeps that work from competing with claims;
+/// 150 ms leaves headroom under the 250 ms bound for the writer's tick.
+const COALESCE: Duration = Duration::from_millis(150);
 
 /// Writer thread polling interval.
 const WRITER_TICK: Duration = Duration::from_millis(10);
