@@ -1,37 +1,37 @@
 //! The daemon's in-memory lease state (`SPEC.md` §9 "Daemon claim path",
-//! `ADR-0009` Part 2).
+//! `ADR-0009` Part 2; compaction `ADR-0010`).
 //!
 //! `claim_paths` / `release_paths` are decided here, against the replay of
-//! the coordination log as of the local ref plus the events this daemon has
-//! acknowledged but not yet committed (`pending`). The background writer in
-//! [`super`] commits `pending` and reports the new log back
-//! ([`Leases::flushed`]).
+//! the coordination ref as of the local tip (its compaction snapshot plus the
+//! `log/` events above it) plus the events this daemon has acknowledged but
+//! not yet committed (`pending`). The background writer in [`super`] commits
+//! `pending` and reports the new state back ([`Leases::flushed`]).
 //!
 //! Other writers (a CLI `spawn --claim`, the daemon's own heartbeats and
 //! merge-gate releases, other processes) update the ref directly. Before
-//! every decision the local ref's tip is compared with the one the log was
-//! read at, by reading the ref file (no git process); the log is reloaded
+//! every decision the local ref's tip is compared with the one the state was
+//! read at, by reading the ref file (no git process); the state is reloaded
 //! only when it moved.
 //!
-//! A full replay scans every live lease for every `ACQUIRE`, so its cost
-//! grows with the square of the log. The replay of the committed log is
-//! therefore cached (`base`) and new events are folded onto it with
-//! [`apply`], the same step [`replay`] performs per event. That is exact
-//! whenever the new events sort after every logged event, which holds for
-//! events this daemon creates now; otherwise the full replay is used.
-//! `conflicts_raw` answers most unrelated pairs with a fast negative, so a
-//! scan over thousands of live leases stays cheap.
+//! The replay of the committed state is cached (`base`) and new events are
+//! folded onto a copy with [`apply`], the same step replay performs per
+//! event. That is exact whenever the new events sort after everything
+//! committed, which holds for events this daemon creates now; otherwise the
+//! full replay is used.
+//!
+//! Late events (`ADR-0010`): a pending event that a flush finds below the
+//! snapshot watermark has been dropped from the union; [`Leases::flushed`]
+//! hands it back so the daemon re-issues it as a fresh event.
 
 use crate::exit::{CliError, PLATFORM};
 use meshtree_core::lease::{
-    replay, EventType, Lease, LeaseEvent, Replay, ReplayConfig, ERROR_CODE_CLAIM_CONFLICT,
+    apply, replay_from, EventType, LeaseEvent, Replay, ReplayConfig, Snapshot, Watermark,
 };
 use meshtree_core::pattern::conflicts_raw;
-use meshtree_core::Rejection;
+use meshtree_core::{Rejection, TaskId};
 use meshtree_platform::coord::{CoordStore, COORD_REF};
 use meshtree_platform::gitops::{CliGitOps, GitOps};
-use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -39,14 +39,16 @@ use std::time::Instant;
 pub struct Leases {
     repo_root: PathBuf,
     config: ReplayConfig,
-    /// The log as of `tip`.
+    /// The compaction snapshot as of `tip`.
+    snapshot: Option<Snapshot>,
+    /// The `log/` events (above the snapshot) as of `tip`.
     log: Vec<LeaseEvent>,
     ids: HashSet<String>,
-    /// `replay(log)`.
+    /// `replay_from(snapshot, log)`.
     base: Replay,
-    /// The log's last event in replay order.
-    last: Option<LeaseEvent>,
-    /// Local coordination ref the log was read at (`None`: not read yet;
+    /// The newest committed key: the last log event, else the watermark.
+    last: Option<Watermark>,
+    /// Local coordination ref the state was read at (`None`: not read yet;
     /// `Some(None)`: the ref did not exist).
     tip: Option<Option<String>>,
     /// Acknowledged events not yet in the ref, in acknowledgement order.
@@ -54,8 +56,8 @@ pub struct Leases {
     /// When the oldest pending event was acknowledged.
     since: Option<Instant>,
     /// This daemon's writer is committing: the ref may move before
-    /// [`Leases::flushed`] delivers the new log, so [`Leases::refresh`] waits
-    /// for it instead of reloading the whole log itself.
+    /// [`Leases::flushed`] delivers the new state, so [`Leases::refresh`]
+    /// waits for it instead of reloading everything itself.
     flushing: bool,
 }
 
@@ -64,6 +66,7 @@ impl Leases {
         Self {
             repo_root: repo_root.to_path_buf(),
             config,
+            snapshot: None,
             log: Vec::new(),
             ids: HashSet::new(),
             base: Replay::default(),
@@ -75,11 +78,11 @@ impl Leases {
         }
     }
 
-    /// Reloads the log if the local ref moved since it was read.
+    /// Reloads the state if the local ref moved since it was read.
     pub fn refresh(&mut self, store: &CoordStore<CliGitOps>) -> Result<(), CliError> {
         if self.flushing {
-            // The writer's flush unions every event in the ref and hands the
-            // result to `flushed` shortly; until then the cached log plus
+            // The writer's flush unions everything in the ref and hands the
+            // result to `flushed` shortly; until then the cached state plus
             // `pending` is what this daemon committed (§9 revocation covers a
             // concurrent foreign writer).
             return Ok(());
@@ -88,49 +91,62 @@ impl Leases {
         if self.tip.as_ref() == Some(&tip) {
             return Ok(());
         }
-        let log = match &tip {
-            Some(oid) => {
-                store
-                    .read_log(oid)
-                    .map_err(|err| CliError::new(PLATFORM, err.to_string()))?
-                    .0
-            }
-            None => Vec::new(),
+        let (snapshot, log) = match &tip {
+            Some(oid) => store
+                .read_state(oid)
+                .map_err(|err| CliError::new(PLATFORM, err.to_string()))?,
+            None => (None, Vec::new()),
         };
-        self.set_log(tip, log);
+        self.set_state(tip, snapshot, log);
         Ok(())
     }
 
-    /// Replaces the log. When the new log only adds events that sort after
-    /// the old one, the cached replay is extended instead of recomputed.
-    fn set_log(&mut self, tip: Option<String>, log: Vec<LeaseEvent>) {
+    /// Replaces the committed state. When only later log events were added
+    /// (same snapshot), the cached replay is extended instead of recomputed.
+    fn set_state(&mut self, tip: Option<String>, snapshot: Option<Snapshot>, log: Vec<LeaseEvent>) {
+        let same_snapshot =
+            snapshot.as_ref().map(|s| &s.watermark) == self.snapshot.as_ref().map(|s| &s.watermark);
         let mut added: Vec<&LeaseEvent> =
             log.iter().filter(|e| !self.ids.contains(&e.id)).collect();
         added.sort_by(|a, b| a.total_cmp(b));
-        let extends = log.len() == self.ids.len() + added.len()
+        let extends = same_snapshot
+            && log.len() == self.ids.len() + added.len()
             && match (&self.last, added.first()) {
-                (Some(last), Some(first)) => first.total_cmp(last) == Ordering::Greater,
+                (Some(last), Some(first)) => !last.covers(first),
                 _ => true,
             };
         if extends {
             for ev in &added {
-                apply(&mut self.base, ev, &self.config);
+                apply(&mut self.base, ev, &self.config, &conflicts_raw);
             }
             if let Some(newest) = added.last() {
-                self.last = Some((*newest).clone());
+                self.last = Some(Watermark::of(newest));
             }
         } else {
-            self.base = replay(&log, &self.config, conflicts_raw);
-            self.last = log.iter().max_by(|a, b| a.total_cmp(b)).cloned();
+            self.base = replay_from(snapshot.as_ref(), &log, &self.config, conflicts_raw);
+            self.last = log
+                .iter()
+                .max_by(|a, b| a.total_cmp(b))
+                .map(Watermark::of)
+                .or_else(|| snapshot.as_ref().map(|s| s.watermark.clone()));
         }
         self.ids = log.iter().map(|e| e.id.clone()).collect();
         self.log = log;
+        self.snapshot = snapshot;
         self.tip = Some(tip);
         let ids = &self.ids;
         self.pending.retain(|e| !ids.contains(&e.id));
         if self.pending.is_empty() {
             self.since = None;
         }
+    }
+
+    /// `true` if the committed snapshot covers `event` (folded, or dropped
+    /// if it arrives now).
+    fn covered(&self, event: &LeaseEvent) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_some_and(|s| s.watermark.covers(event))
     }
 
     /// The rejections `candidates` would get if added now (empty: all
@@ -147,20 +163,20 @@ impl Leases {
         let mut seen = HashSet::new();
         new.retain(|e| seen.insert(e.id.as_str()));
         let incremental = match (&self.last, new.first()) {
-            (Some(last), Some(first)) => first.total_cmp(last) == Ordering::Greater,
+            (Some(last), Some(first)) => !last.covers(first),
             _ => true,
         };
         let state = if incremental {
             let mut state = self.base.clone();
             for ev in new {
-                apply(&mut state, ev, &self.config);
+                apply(&mut state, ev, &self.config, &conflicts_raw);
             }
             state
         } else {
             let mut all = self.log.clone();
             all.extend(self.pending.iter().cloned());
             all.extend(candidates.iter().cloned());
-            replay(&all, &self.config, conflicts_raw)
+            replay_from(self.snapshot.as_ref(), &all, &self.config, conflicts_raw)
         };
         state
             .rejected
@@ -188,10 +204,41 @@ impl Leases {
         self.since.map(|t| t.elapsed())
     }
 
-    /// A commit of the ref to `tip` holding `log` succeeded.
-    pub fn flushed(&mut self, tip: String, log: Vec<LeaseEvent>) {
+    /// The committed snapshot's watermark.
+    pub fn watermark(&self) -> Option<&Watermark> {
+        self.snapshot.as_ref().map(|s| &s.watermark)
+    }
+
+    /// Moves new events this daemon creates above the watermark when this
+    /// machine's clock trails it (another machine's clock runs ahead):
+    /// replay ignores events at or below `W`, so a claim stamped there would
+    /// be dropped instead of decided.
+    pub fn lift(&self, events: &mut [LeaseEvent]) {
+        if let Some(w) = self.watermark() {
+            for e in events.iter_mut().filter(|e| w.covers(e)) {
+                e.ts = meshtree_core::Timestamp::from_unix_ms(w.ts.unix_ms().saturating_add(1));
+            }
+        }
+    }
+
+    /// A commit of the ref to `tip` holding `snapshot` and `log` succeeded;
+    /// `dropped` are ids of committed events the union dropped below the
+    /// watermark. Returns those pending events (removed from `pending`) for
+    /// re-issue.
+    pub fn flushed(
+        &mut self,
+        tip: String,
+        snapshot: Option<Snapshot>,
+        log: Vec<LeaseEvent>,
+        dropped: &[String],
+    ) -> Vec<LeaseEvent> {
         self.flushing = false;
-        self.set_log(Some(tip), log);
+        let (late, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|e| dropped.contains(&e.id));
+        self.pending = keep;
+        self.set_state(Some(tip), snapshot, log);
+        late
     }
 
     /// The writer starts (`true`) or abandons (`false`) a commit.
@@ -199,99 +246,54 @@ impl Leases {
         self.flushing = flushing;
     }
 
-    /// Re-adds journaled events missing from the ref (crash recovery,
-    /// §10). Call after [`Leases::refresh`]. Returns how many were missing.
-    pub fn recover(&mut self, journaled: Vec<LeaseEvent>) -> usize {
+    /// Crash recovery (§10), after [`Leases::refresh`]. `journaled` are the
+    /// WAL's lease events in order; `intents` the claims each non-terminal
+    /// task holds per the WAL. Journaled events missing from the ref are
+    /// re-queued; those the snapshot covers are either folded (their effect
+    /// is in the snapshot) or were dropped as late, which only the table can
+    /// tell: for the latest such `ACQUIRE`/`RELEASE` per task and path whose
+    /// effect is missing while the WAL still intends it, a fresh event is
+    /// returned for re-issue. Returns `(re-queued, to re-issue)`.
+    pub fn recover(
+        &mut self,
+        journaled: Vec<LeaseEvent>,
+        intents: &BTreeMap<TaskId, BTreeSet<String>>,
+    ) -> (usize, Vec<LeaseEvent>) {
         let missing: Vec<LeaseEvent> = journaled
             .into_iter()
             .filter(|e| !self.ids.contains(&e.id))
             .filter(|e| !self.pending.iter().any(|p| p.id == e.id))
             .collect();
-        let n = missing.len();
-        self.accept(missing);
-        n
-    }
-}
-
-/// One step of [`replay`]: applies `ev` to `state`. Must stay identical to
-/// the loop body of `meshtree_core::lease::replay` (checked by
-/// `fold_matches_core_replay`).
-fn apply(state: &mut Replay, ev: &LeaseEvent, config: &ReplayConfig) {
-    let grace = config.skew_grace_secs;
-    match ev.kind {
-        EventType::Acquire => {
-            let mut expired = Vec::new();
-            let mut holder: Option<&Lease> = None;
-            for lease in state.leases.values() {
-                if lease.task == ev.task
-                    || !(lease.path == ev.path || conflicts_raw(&lease.path, &ev.path))
-                {
-                    continue;
+        let (covered, fresh): (Vec<_>, Vec<_>) = missing.into_iter().partition(|e| self.covered(e));
+        let mut latest: BTreeMap<(TaskId, String), LeaseEvent> = BTreeMap::new();
+        for e in covered {
+            if matches!(e.kind, EventType::Acquire | EventType::Release) {
+                latest.insert((e.task.clone(), e.path.clone()), e);
+            }
+        }
+        let reissue: Vec<LeaseEvent> = latest
+            .into_values()
+            .filter(|e| {
+                let intended = intents.get(&e.task).is_some_and(|c| c.contains(&e.path));
+                let held = self
+                    .base
+                    .leases
+                    .get(&e.path)
+                    .is_some_and(|l| l.task == e.task);
+                let lost = self.base.rejected.iter().any(|r| r.event == e.id)
+                    || self
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.rejected.contains(&e.id));
+                match e.kind {
+                    EventType::Acquire => intended && !held && !lost,
+                    _ => !intended && held,
                 }
-                if lease.is_expired_at(ev.ts, grace) {
-                    expired.push(lease.path.clone());
-                } else if holder.is_none() {
-                    holder = Some(lease);
-                }
-            }
-            if let Some(lease) = holder {
-                let rejection = Rejection {
-                    code: ERROR_CODE_CLAIM_CONFLICT.to_string(),
-                    event: ev.id.clone(),
-                    path: ev.path.clone(),
-                    task: ev.task.clone(),
-                    machine: ev.machine.clone(),
-                    holder: lease.task.clone(),
-                    holder_path: lease.path.clone(),
-                };
-                state.rejected.push(rejection);
-                return;
-            }
-            for path in expired {
-                state.leases.remove(&path);
-            }
-            let ttl_secs = ev.ttl_secs.unwrap_or(config.default_ttl_secs);
-            let acquired_at = match state.leases.get(&ev.path) {
-                Some(own) if !own.is_expired_at(ev.ts, grace) => own.acquired_at,
-                _ => ev.ts,
-            };
-            state.leases.insert(
-                ev.path.clone(),
-                Lease {
-                    path: ev.path.clone(),
-                    task: ev.task.clone(),
-                    machine: ev.machine.clone(),
-                    acquired_at,
-                    ttl_secs,
-                    last_heartbeat: ev.ts,
-                },
-            );
-        }
-        EventType::Release => {
-            if state
-                .leases
-                .get(&ev.path)
-                .is_some_and(|l| l.task == ev.task)
-            {
-                state.leases.remove(&ev.path);
-            }
-        }
-        EventType::Heartbeat => {
-            if let Some(lease) = state.leases.get_mut(&ev.path) {
-                if lease.task == ev.task && !lease.is_expired_at(ev.ts, grace) {
-                    lease.last_heartbeat = lease.last_heartbeat.max(ev.ts);
-                }
-            }
-        }
-        EventType::ExpireSweep => {
-            if state
-                .leases
-                .get(&ev.path)
-                .is_some_and(|l| l.task == ev.task && l.is_expired_at(ev.ts, grace))
-            {
-                state.leases.remove(&ev.path);
-            }
-        }
+            })
+            .collect();
+        let n = fresh.len();
+        self.accept(fresh);
+        (n, reissue)
     }
 }
 
@@ -334,7 +336,8 @@ fn is_oid(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meshtree_core::{TaskId, Timestamp};
+    use meshtree_core::lease::{compact, replay};
+    use meshtree_core::Timestamp;
 
     const CONFIG: ReplayConfig = ReplayConfig {
         default_ttl_secs: 900,
@@ -361,8 +364,9 @@ mod tests {
     #[test]
     fn decisions_see_log_and_pending_and_flush_prunes() {
         let mut l = leases();
-        l.set_log(
+        l.set_state(
             Some("a".repeat(40)),
+            None,
             vec![ev("01A", EventType::Acquire, "src/**", 1, 1_000)],
         );
         // Conflicts with the committed log.
@@ -377,17 +381,23 @@ mod tests {
         let r = l.decide(&[ev("01D", EventType::Acquire, "docs/a.md", 3, 4_000)]);
         assert_eq!(r.len(), 1, "pending events are part of the decision");
         // The flush lands it in the log: pending empties.
-        l.flushed(
+        let late = l.flushed(
             "b".repeat(40),
+            None,
             vec![ev("01A", EventType::Acquire, "src/**", 1, 1_000), docs],
+            &[],
         );
+        assert!(late.is_empty());
         assert!(l.pending().is_empty() && l.waiting().is_none());
         // Recovery re-adds only events the ref lacks.
-        let n = l.recover(vec![
-            ev("01C", EventType::Acquire, "docs/**", 2, 3_000),
-            ev("01E", EventType::Release, "docs/**", 2, 5_000),
-        ]);
-        assert_eq!(n, 1);
+        let (n, reissue) = l.recover(
+            vec![
+                ev("01C", EventType::Acquire, "docs/**", 2, 3_000),
+                ev("01E", EventType::Release, "docs/**", 2, 5_000),
+            ],
+            &BTreeMap::new(),
+        );
+        assert_eq!((n, reissue.len()), (1, 0));
         assert_eq!(l.pending()[0].id, "01E");
     }
 
@@ -418,7 +428,7 @@ mod tests {
         let mut ms = 1_000_000;
         (0..n)
             .map(|i| {
-                ms += [1, 1_000, 300_000, 1_600_000][(next() % 4) as usize];
+                ms += [1, 1_000, 300_000, 1_600_000, 40_000_000][(next() % 5) as usize];
                 let kind = KINDS[(next() % 4) as usize];
                 let mut e = ev(
                     &format!("{i:08}"),
@@ -434,21 +444,10 @@ mod tests {
     }
 
     #[test]
-    fn fold_matches_core_replay() {
-        for seed in 1..200 {
+    fn cached_decisions_match_full_replay_with_and_without_snapshot() {
+        for seed in 1..120 {
             let events = stream(seed, 60);
             let full = replay(&events, &CONFIG, conflicts_raw);
-            for split in [0, 1, 17, 30, 59, 60] {
-                let mut state = replay(&events[..split], &CONFIG, conflicts_raw);
-                for e in &events[split..] {
-                    apply(&mut state, e, &CONFIG);
-                }
-                assert_eq!(state, full, "seed {seed}, split {split}");
-            }
-            // Through the cache: extending the log, then deciding.
-            let mut l = leases();
-            l.set_log(Some("a".repeat(40)), events[..20].to_vec());
-            l.set_log(Some("b".repeat(40)), events[..40].to_vec());
             let candidates = &events[40..];
             let expected: Vec<Rejection> = full
                 .rejected
@@ -456,16 +455,30 @@ mod tests {
                 .filter(|r| candidates.iter().any(|c| c.id == r.event))
                 .cloned()
                 .collect();
+            // Through the cache: extending the log, then deciding.
+            let mut l = leases();
+            l.set_state(Some("a".repeat(40)), None, events[..20].to_vec());
+            l.set_state(Some("b".repeat(40)), None, events[..40].to_vec());
             assert_eq!(l.decide(candidates), expected, "seed {seed}");
-            assert_eq!(l.base, replay(&events[..40], &CONFIG, conflicts_raw));
+            // The same from a compacted prefix.
+            if let Some((snap, rest)) = compact(None, &events[..40], &CONFIG, conflicts_raw, 0) {
+                let mut c = leases();
+                c.set_state(Some("c".repeat(40)), Some(snap), rest);
+                assert_eq!(c.decide(candidates), expected, "seed {seed} compacted");
+                assert_eq!(
+                    c.base.leases,
+                    replay(&events[..40], &CONFIG, conflicts_raw).leases
+                );
+            }
         }
     }
 
     #[test]
     fn out_of_order_events_fall_back_to_full_replay() {
         let mut l = leases();
-        l.set_log(
+        l.set_state(
             Some("a".repeat(40)),
+            None,
             vec![ev("02", EventType::Acquire, "src/**", 1, 5_000)],
         );
         // An event older than the log (a skewed remote clock) is decided by
@@ -484,8 +497,69 @@ mod tests {
         assert_eq!(full.rejected[0].event, "02");
         assert!(l.decide(std::slice::from_ref(&early)).is_empty());
         // A log that is not an extension is replayed from scratch.
-        l.set_log(Some("b".repeat(40)), vec![early.clone()]);
+        l.set_state(Some("b".repeat(40)), None, vec![early.clone()]);
         assert_eq!(l.base, replay(&[early], &CONFIG, conflicts_raw));
+    }
+
+    #[test]
+    fn late_and_folded_events_after_compaction() {
+        // A long history; compaction folds its old part.
+        let day = 24 * 60 * 60 * 1000;
+        let mut history = Vec::new();
+        for i in 0..10u64 {
+            history.push(ev(
+                &format!("H{i:02}A"),
+                EventType::Acquire,
+                &format!("h/{i}/**"),
+                1,
+                i * 10,
+            ));
+            history.push(ev(
+                &format!("H{i:02}R"),
+                EventType::Release,
+                &format!("h/{i}/**"),
+                1,
+                i * 10 + 1,
+            ));
+        }
+        // Task 2's claim, folded into the snapshot and still held.
+        let kept = ev("K", EventType::Acquire, "kept/**", 2, 500);
+        // Task 2's claim that never reached the ref (dropped as late).
+        let late = ev("L", EventType::Acquire, "late/**", 2, 450);
+        history.push(kept.clone());
+        history.push(ev("NEWEST", EventType::Heartbeat, "kept/**", 2, 3 * day));
+        let (snap, rest) = compact(None, &history, &CONFIG, conflicts_raw, 0).unwrap();
+        assert!(snap.watermark.covers(&late), "the late claim is below W");
+
+        let mut l = leases();
+        l.set_state(Some("a".repeat(40)), Some(snap.clone()), rest.clone());
+        // A pending event the flush reports as dropped comes back for re-issue.
+        l.accept(vec![late.clone()]);
+        let back = l.flushed(
+            "b".repeat(40),
+            Some(snap),
+            rest,
+            std::slice::from_ref(&late.id),
+        );
+        assert_eq!(back, vec![late.clone()]);
+        assert!(l.pending().is_empty());
+
+        // Recovery: the folded, still-held claim needs nothing; the late one
+        // (missing from the table, still intended) is re-issued.
+        let mut intents = BTreeMap::new();
+        intents.insert(
+            TaskId::from_ulid(2),
+            BTreeSet::from(["kept/**".to_string(), "late/**".to_string()]),
+        );
+        let (requeued, reissue) = l.recover(vec![kept, late.clone()], &intents);
+        assert_eq!(requeued, 0);
+        assert_eq!(reissue, vec![late]);
+        // No longer intended (task finished): nothing to re-issue.
+        let (_, none) = l.recover(
+            vec![ev("L", EventType::Acquire, "late/**", 2, 450)],
+            &BTreeMap::new(),
+        );
+        assert!(none.is_empty());
     }
 
     #[test]

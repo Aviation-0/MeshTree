@@ -124,6 +124,8 @@ fn check(kind: &str, value: &Value, at: &str) {
             assert_eq!(keys, ["leases", "rejected", "watermark"], "{at}");
             let watermark: Watermark = round_trip(&object["watermark"], at);
             assert_ulid(&watermark.id, at);
+            // The documented example is the type the code reads and writes.
+            drop(round_trip::<meshtree_core::lease::Snapshot>(value, at));
             let leases: Vec<Lease> = round_trip(&object["leases"], at);
             assert!(
                 leases.windows(2).all(|w| w[0].path < w[1].path),

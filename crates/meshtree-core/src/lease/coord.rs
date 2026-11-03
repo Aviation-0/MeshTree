@@ -3,16 +3,21 @@
 //! ```text
 //! refs/meshtree/coord
 //! ├── leases/<sha1(normalized-path)>.json   # derived snapshot (fast remote reads)
-//! ├── log/<ULID>.json                        # append-only event log (source of truth)
+//! ├── log/<ULID>.json                        # event log above the watermark (source of truth)
+//! ├── snapshot/<ULID>.json                   # replay state at watermark W (ADR-0010; at most one)
 //! └── tasks/<task-id>.json                    # cross-machine task registry
 //! ```
+//!
+//! The snapshot file is named `<ts as unix ms>-<counter>-<machine>-<id>`
+//! after the watermark (`docs/protocol.md` §3.5); readers use the
+//! `watermark` field inside it.
 //!
 //! Pure: maps between events / replay output and `path → bytes` files. Git
 //! object plumbing lives in `meshtree-platform`. Encoding is canonical
 //! (pretty JSON + trailing newline, `BTreeMap` order), so two machines that
 //! hold the same event set write byte-identical trees.
 
-use super::{LeaseEvent, Replay};
+use super::{LeaseEvent, Replay, Snapshot};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -22,6 +27,32 @@ pub const LOG_DIR: &str = "log";
 pub const LEASES_DIR: &str = "leases";
 /// Cross-machine task registry directory.
 pub const TASKS_DIR: &str = "tasks";
+/// Compaction snapshot directory (`ADR-0010`).
+pub const SNAPSHOT_DIR: &str = "snapshot";
+
+/// `snapshot/<ts ms>-<counter>-<machine>-<id>.json`. Characters outside
+/// `[A-Za-z0-9._-]` in the machine id become `_`, so the name stays one
+/// tree entry.
+pub fn snapshot_file(snapshot: &Snapshot) -> String {
+    let w = &snapshot.watermark;
+    let machine: String = w
+        .machine
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!(
+        "{SNAPSHOT_DIR}/{}-{}-{machine}-{}.json",
+        w.ts.unix_ms(),
+        w.counter,
+        w.id
+    )
+}
 
 /// `leases/<sha1(normalized-path)>.json`.
 pub fn lease_file(normalized_path: &str) -> String {
@@ -55,6 +86,56 @@ pub fn encode(events: &[LeaseEvent], replay: &Replay) -> BTreeMap<String, Vec<u8
         files.insert(lease_file(&lease.path), canonical_json(lease));
     }
     files
+}
+
+/// [`encode`] for a compacted tree: the snapshot file, the events above its
+/// watermark, and the `leases/` of `replay`.
+pub fn encode_compacted(
+    snapshot: Option<&Snapshot>,
+    events: &[LeaseEvent],
+    replay: &Replay,
+) -> BTreeMap<String, Vec<u8>> {
+    let mut files = encode(events, replay);
+    if let Some(snapshot) = snapshot {
+        files.insert(snapshot_file(snapshot), canonical_json(snapshot));
+    }
+    files
+}
+
+/// Decodes the compaction snapshot, if the tree has one (`ADR-0010`). An
+/// entry whose JSON is invalid or whose filename does not match its
+/// watermark id is skipped with a [`DecodeIssue`]; of several valid ones
+/// (never written by MeshTree) the largest watermark wins, as between tips.
+pub fn decode_snapshot<'a, I>(files: I) -> (Option<Snapshot>, Vec<DecodeIssue>)
+where
+    I: IntoIterator<Item = (&'a str, &'a [u8])>,
+{
+    let mut best: Option<Snapshot> = None;
+    let mut issues = Vec::new();
+    for (path, bytes) in files {
+        if !(path.starts_with("snapshot/") && path.ends_with(".json")) {
+            continue;
+        }
+        match serde_json::from_slice::<Snapshot>(bytes) {
+            Ok(snapshot) if snapshot_file(&snapshot) == path => {
+                if best
+                    .as_ref()
+                    .map_or(true, |b| snapshot.watermark > b.watermark)
+                {
+                    best = Some(snapshot);
+                }
+            }
+            Ok(_) => issues.push(DecodeIssue {
+                path: path.to_string(),
+                reason: "filename does not match the watermark id".to_string(),
+            }),
+            Err(err) => issues.push(DecodeIssue {
+                path: path.to_string(),
+                reason: err.to_string(),
+            }),
+        }
+    }
+    (best, issues)
 }
 
 /// A `log/` entry that could not be decoded; skipped identically on every

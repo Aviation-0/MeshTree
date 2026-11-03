@@ -11,6 +11,14 @@
 //! gets merge commits. Network failures never block local progress: the
 //! local ref still advances and the outcome reports the push as deferred.
 //!
+//! Compaction (`SPEC.md` §9, `ADR-0010`): a tree may hold one
+//! `snapshot/<W>.json`, the replay state at watermark `W`. Replay starts from
+//! the larger of the tips' snapshots and folds the events above it; events
+//! at or below it are dropped from the union (a dropped *new* event is
+//! reported in [`SyncOutcome::dropped`] for re-issue). A store built
+//! [`CoordStore::with_compaction`] folds old events into a new snapshot when
+//! enough are foldable; the replayed state is unchanged.
+//!
 //! A round's git subprocess count does not depend on the log's length
 //! (`ADR-0009` Part 1): each tip is read with one `ls-tree` and one batched
 //! `cat-file`, blobs whose bytes a tip already holds keep their OIDs, and only
@@ -26,8 +34,10 @@
 //! [`CoordStore::sync_with`] replace both.
 
 use crate::gitops::{GitError, GitOps, TreeEntry, ERROR_CODE_CAS_REJECTED};
-use meshtree_core::lease::coord::{decode_log, encode, DecodeIssue};
-use meshtree_core::lease::{replay, LeaseEvent, Replay, ReplayConfig};
+use meshtree_core::lease::coord::{decode_log, decode_snapshot, encode_compacted, DecodeIssue};
+use meshtree_core::lease::{
+    compact, replay_from, LeaseEvent, Replay, ReplayConfig, Snapshot, Watermark,
+};
 use meshtree_core::pattern::conflicts_raw;
 use std::collections::hash_map::RandomState;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -111,6 +121,13 @@ pub struct SyncOutcome {
     pub deferred: Option<String>,
     /// Log entries skipped as malformed.
     pub issues: Vec<DecodeIssue>,
+    /// Watermark of the snapshot in the tree after the sync (`ADR-0010`).
+    pub watermark: Option<Watermark>,
+    /// `true` if this round compacted the log into a new snapshot.
+    pub compacted: bool,
+    /// Ids of `new_events` dropped because a snapshot already covers their
+    /// key (late events, §9): the caller re-issues them as fresh events.
+    pub dropped: Vec<String>,
 }
 
 /// Reads and writes the coordination ref through [`GitOps`].
@@ -118,6 +135,9 @@ pub struct CoordStore<G> {
     git: G,
     remote: Option<String>,
     config: ReplayConfig,
+    /// Compact past this many foldable events (`None`: never; `ADR-0010`
+    /// reserves compaction for daemons).
+    compact_threshold: Option<usize>,
 }
 
 impl<G: GitOps> CoordStore<G> {
@@ -127,7 +147,22 @@ impl<G: GitOps> CoordStore<G> {
             git,
             remote,
             config,
+            compact_threshold: None,
         }
+    }
+
+    /// Lets sync rounds compact the log once more than `threshold` events
+    /// are foldable (`SPEC.md` §9 Compaction; the daemon passes
+    /// `meshtree_core::lease::COMPACT_THRESHOLD`).
+    pub fn with_compaction(mut self, threshold: usize) -> Self {
+        self.compact_threshold = Some(threshold);
+        self
+    }
+
+    /// The compaction snapshot and the `log/` events of commit `oid`.
+    pub fn read_state(&self, oid: &str) -> Result<(Option<Snapshot>, Vec<LeaseEvent>), GitError> {
+        let tip = self.tip(oid)?;
+        Ok((tip.snapshot().0, tip.log().0))
     }
 
     /// The underlying git backend.
@@ -137,7 +172,7 @@ impl<G: GitOps> CoordStore<G> {
 
     /// Every blob of commit `oid`: one `ls-tree` and one batched read,
     /// however long the log is (`ADR-0009` Part 1).
-    fn snapshot(&self, oid: &str) -> Result<Snapshot, GitError> {
+    fn tip(&self, oid: &str) -> Result<TipFiles, GitError> {
         let entries: Vec<TreeEntry> = self
             .git
             .ls_tree(oid)?
@@ -146,7 +181,7 @@ impl<G: GitOps> CoordStore<G> {
             .collect();
         let oids: Vec<String> = entries.iter().map(|e| e.oid.clone()).collect();
         let blobs = self.git.cat_blobs(&oids)?;
-        Ok(Snapshot {
+        Ok(TipFiles {
             files: entries
                 .into_iter()
                 .zip(blobs)
@@ -157,7 +192,7 @@ impl<G: GitOps> CoordStore<G> {
 
     /// Decodes the event log stored in commit `oid`.
     pub fn read_log(&self, oid: &str) -> Result<(Vec<LeaseEvent>, Vec<DecodeIssue>), GitError> {
-        Ok(self.snapshot(oid)?.log())
+        Ok(self.tip(oid)?.log())
     }
 
     /// Appends `new_events` (may be empty: a pure fetch/flush) and syncs.
@@ -200,20 +235,56 @@ impl<G: GitOps> CoordStore<G> {
             }
             let snapshots = tips
                 .iter()
-                .map(|oid| self.snapshot(oid))
+                .map(|oid| self.tip(oid))
                 .collect::<Result<Vec<_>, _>>()?;
+            // Between tips the larger watermark wins; events it covers are
+            // subsumed and leave the union (§9, ADR-0010).
+            let mut winner: Option<Snapshot> = None;
             for snapshot in &snapshots {
                 let (log, bad) = snapshot.log();
                 events.extend(log);
                 issues.extend(bad);
+                let (snap, bad) = snapshot.snapshot();
+                issues.extend(bad);
+                if let Some(snap) = snap {
+                    if winner
+                        .as_ref()
+                        .map_or(true, |w| snap.watermark > w.watermark)
+                    {
+                        winner = Some(snap);
+                    }
+                }
             }
+            let covered = |e: &LeaseEvent| winner.as_ref().is_some_and(|w| w.watermark.covers(e));
+            let dropped: Vec<String> = new_events
+                .iter()
+                .filter(|e| covered(e))
+                .map(|e| e.id.clone())
+                .collect();
             events.extend_from_slice(new_events);
+            events.retain(|e| !covered(e));
             events.sort_by(|a, b| a.total_cmp(b));
             let mut seen = BTreeSet::new();
             events.retain(|e| seen.insert(e.id.clone()));
 
-            let derived = replay(&events, &self.config, conflicts_raw);
-            let mut files = encode(&events, &derived);
+            let derived = replay_from(winner.as_ref(), &events, &self.config, conflicts_raw);
+            let compacted = self.compact_threshold.and_then(|threshold| {
+                compact(
+                    winner.as_ref(),
+                    &events,
+                    &self.config,
+                    conflicts_raw,
+                    threshold,
+                )
+            });
+            let (snapshot, kept) = match compacted {
+                // Same replay by construction (ADR-0010 invariant).
+                Some((snap, rest)) => (Some(snap), rest),
+                None => (winner.clone(), events.clone()),
+            };
+            let did_compact =
+                snapshot.as_ref().map(|s| &s.watermark) != winner.as_ref().map(|w| &w.watermark);
+            let mut files = encode_compacted(snapshot.as_ref(), &kept, &derived);
             let mut registry: BTreeMap<String, Vec<u8>> = BTreeMap::new();
             for snapshot in &snapshots {
                 for (id, bytes) in snapshot.tasks() {
@@ -290,13 +361,16 @@ impl<G: GitOps> CoordStore<G> {
                 pushed,
                 deferred,
                 issues,
+                watermark: snapshot.map(|s| s.watermark),
+                compacted: did_compact,
+                dropped,
             });
         }
     }
 
     /// The task registry stored in commit `oid`: task id → record bytes.
     pub fn read_tasks(&self, oid: &str) -> Result<BTreeMap<String, Vec<u8>>, GitError> {
-        Ok(self.snapshot(oid)?.tasks())
+        Ok(self.tip(oid)?.tasks())
     }
 
     /// Writes `dir/name → bytes` files (one directory level, as in the coord
@@ -341,17 +415,26 @@ impl<G: GitOps> CoordStore<G> {
 }
 
 /// The blobs of one coordination commit: `(path, oid, bytes)`.
-struct Snapshot {
+struct TipFiles {
     files: Vec<(String, String, Vec<u8>)>,
 }
 
-impl Snapshot {
+impl TipFiles {
     /// The decoded `log/` events.
     fn log(&self) -> (Vec<LeaseEvent>, Vec<DecodeIssue>) {
         decode_log(
             self.files
                 .iter()
                 .filter(|(path, _, _)| path.starts_with("log/"))
+                .map(|(path, _, bytes)| (path.as_str(), bytes.as_slice())),
+        )
+    }
+
+    /// The compaction snapshot (`ADR-0010`), if any.
+    fn snapshot(&self) -> (Option<Snapshot>, Vec<DecodeIssue>) {
+        decode_snapshot(
+            self.files
+                .iter()
                 .map(|(path, _, bytes)| (path.as_str(), bytes.as_slice())),
         )
     }

@@ -48,7 +48,7 @@ use meshtree_platform::ipc::{
 };
 use meshtree_platform::lock::{boot_id, pid_alive, same_boot, DaemonLock, LockError};
 use meshtree_platform::teardown::gc_quarantine;
-use meshtree_platform::wal::{replay, Wal, WalOp};
+use meshtree_platform::wal::{replay, Wal, WalOp, WalState};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -80,7 +80,7 @@ mod leases;
 mod recovery;
 
 use leases::Leases;
-use meshtree_core::lease::{EventType, LeaseEvent};
+use meshtree_core::lease::{EventType, LeaseEvent, COMPACT_THRESHOLD};
 use meshtree_platform::coord::{CoordStore, SyncOutcome};
 use meshtree_platform::gitops::CliGitOps;
 use std::time::Instant;
@@ -191,7 +191,7 @@ pub fn run(cwd: &Path) -> Result<(), CliError> {
     // Recover before accepting clients (§10 Crash safety).
     let recovery_start = std::time::Instant::now();
     let recovered = daemon.recover(&state);
-    match daemon.recover_leases(journaled) {
+    match daemon.recover_leases(journaled, &state) {
         Ok(0) => {}
         Ok(n) => {
             note!("recovery: re-queued {n} acknowledged lease event(s) for the coordination ref")
@@ -937,10 +937,11 @@ impl Daemon {
         } else {
             (EventType::Release, 0)
         };
-        let batch = claims::events(kind, &task.id, &paths, &machine_id(&self.config), ttl);
+        let mut batch = claims::events(kind, &task.id, &paths, &machine_id(&self.config), ttl);
         {
             let mut leases = self.leases();
             leases.refresh(&self.reader())?;
+            leases.lift(&mut batch);
             if claim {
                 let rejected = leases.decide(&batch);
                 if !rejected.is_empty() {
@@ -984,7 +985,8 @@ impl Daemon {
         if !sync {
             return Ok(json!({ "paths": paths, "coord": "pending", "deferred": null }));
         }
-        let outcome = self.flush_now()?;
+        let (outcome, late) = self.flush_now()?;
+        self.reissue(&mut inner, late)?;
         let revoked = claims::revoke_rejected(&self.repo_root, &outcome)?;
         let lost: Vec<String> = revoked
             .iter()
@@ -1010,7 +1012,7 @@ impl Daemon {
 
     /// Commits the pending lease events (and fetches/pushes), then reloads
     /// the in-memory log from the new tip. Does not take the operation mutex.
-    fn flush_now(&self) -> Result<SyncOutcome, CliError> {
+    fn flush_now(&self) -> Result<(SyncOutcome, Vec<LeaseEvent>), CliError> {
         let _flushing = self
             .flush_lock
             .lock()
@@ -1021,21 +1023,31 @@ impl Daemon {
             (leases.pending(), leases.waiting())
         };
         let started = Instant::now();
+        // The daemon is the one writer that compacts (ADR-0010).
         let committed = claims::store(&self.repo_root, &self.config).and_then(|store| {
+            let store = store.with_compaction(COMPACT_THRESHOLD);
             let outcome = store.sync(&batch).map_err(claims::coord_error)?;
-            let (log, _) = store
-                .read_log(&outcome.oid)
+            let (snapshot, log) = store
+                .read_state(&outcome.oid)
                 .map_err(|err| CliError::new(PLATFORM, err.to_string()))?;
-            Ok((outcome, log))
+            Ok((outcome, snapshot, log))
         });
-        let (outcome, log) = match committed {
+        let (outcome, snapshot, log) = match committed {
             Ok(done) => done,
             Err(err) => {
                 self.leases().set_flushing(false);
                 return Err(err);
             }
         };
-        self.leases().flushed(outcome.oid.clone(), log);
+        let late = self
+            .leases()
+            .flushed(outcome.oid.clone(), snapshot, log, &outcome.dropped);
+        if outcome.compacted {
+            note!(
+                "coordination log compacted (watermark {})",
+                outcome.watermark.as_ref().map_or("-", |w| w.id.as_str())
+            );
+        }
         self.dirty
             .store(outcome.deferred.is_some(), Ordering::SeqCst);
         if let Some(waited) = waited {
@@ -1044,15 +1056,58 @@ impl Daemon {
             self.last_flush_ms
                 .store(ms(started.elapsed()), Ordering::SeqCst);
         }
-        Ok(outcome)
+        Ok((outcome, late))
+    }
+
+    /// Re-issues lease events a compaction left below its watermark (late
+    /// events, `ADR-0010`) as fresh events above it: same kind, path, task
+    /// and TTL, new id, journaled and pending like an acknowledged claim. A
+    /// re-issued `ACQUIRE` wins or is rejected (`MT-001`, revoked by the next
+    /// flush), exactly as a new claim. Callers hold the operation mutex.
+    fn reissue(&self, inner: &mut Inner, late: Vec<LeaseEvent>) -> Result<usize, CliError> {
+        if late.is_empty() {
+            return Ok(0);
+        }
+        let floor = self
+            .leases()
+            .watermark()
+            .map_or(0, |w| w.ts.unix_ms().saturating_add(1));
+        let now = clock::now_unix_ms().max(floor);
+        let counter = clock::now_unix_nanos();
+        let mut ids = TaskIdAllocator::new();
+        let fresh: Vec<LeaseEvent> = late
+            .into_iter()
+            .enumerate()
+            .map(|(i, e)| LeaseEvent {
+                id: ids.allocate(now, clock::entropy()).as_str()[2..].to_string(),
+                ts: Timestamp::from_unix_ms(now),
+                counter: counter + i as u64,
+                machine: machine_id(&self.config),
+                ..e
+            })
+            .collect();
+        let mut by_task: BTreeMap<TaskId, Vec<LeaseEvent>> = BTreeMap::new();
+        for e in &fresh {
+            by_task.entry(e.task.clone()).or_default().push(e.clone());
+        }
+        let ops = by_task
+            .into_iter()
+            .map(|(task, events)| WalOp::Events { task, events })
+            .collect();
+        inner.journal_all(ops)?;
+        let n = fresh.len();
+        self.leases().accept(fresh);
+        note!("re-issued {n} lease event(s) left below the compaction watermark");
+        Ok(n)
     }
 
     /// [`Daemon::flush_now`], then revokes local claims a remote winner
     /// took (§9). Takes the operation mutex for the revocation.
     fn flush_and_revoke(&self) -> Result<(SyncOutcome, Vec<claims::Revocation>), CliError> {
-        let outcome = self.flush_now()?;
+        let (outcome, late) = self.flush_now()?;
         let revoked = {
-            let _inner = self.lock();
+            let mut inner = self.lock();
+            self.reissue(&mut inner, late)?;
             claims::revoke_rejected(&self.repo_root, &outcome)?
         };
         for r in &revoked {
@@ -1097,10 +1152,22 @@ impl Daemon {
 
     /// Loads the in-memory log and re-queues journaled lease events the ref
     /// lacks (§10 Crash safety). Returns how many were re-queued.
-    fn recover_leases(&self, journaled: Vec<LeaseEvent>) -> Result<usize, CliError> {
-        let mut leases = self.leases();
-        leases.refresh(&self.reader())?;
-        Ok(leases.recover(journaled))
+    fn recover_leases(
+        &self,
+        journaled: Vec<LeaseEvent>,
+        state: &WalState,
+    ) -> Result<usize, CliError> {
+        let intents: BTreeMap<TaskId, BTreeSet<String>> = state
+            .live_tasks()
+            .map(|(id, t)| (id.clone(), t.claims.clone()))
+            .collect();
+        let (requeued, late) = {
+            let mut leases = self.leases();
+            leases.refresh(&self.reader())?;
+            leases.recover(journaled, &intents)
+        };
+        let reissued = self.reissue(&mut self.lock(), late)?;
+        Ok(requeued + reissued)
     }
 }
 

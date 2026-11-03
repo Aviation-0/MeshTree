@@ -192,7 +192,7 @@ Not stored in the ref. A rejected `ACQUIRE` stays in `log/` for audit, and every
 
 ### 3.5 Snapshot (`ADR-0010`)
 
-`snapshot/<W>.json`. **Normative format for `T-050`, which implements compaction; no released binary writes snapshots yet.** `W` in the file name is the watermark rendered as `<ts as unix ms>-<counter>-<machine>-<id>`, which sorts like the ordering key for equal-width timestamps. Readers must use the `watermark` field, not the file name.
+`snapshot/<W>.json`. Written by daemons since `T-050` (Rust type: `meshtree_core::lease::Snapshot`). `W` in the file name is the watermark rendered as `<ts as unix ms>-<counter>-<machine>-<id>`, which sorts like the ordering key for equal-width timestamps. Readers must use the `watermark` field, not the file name.
 
 ```json snapshot
 {
@@ -247,7 +247,7 @@ Two patterns conflict when either matches the other's canonical literal (wildcar
 
 ## 5. Compaction (`ADR-0010`)
 
-**Specified; implemented by `T-050`.** Compaction keeps the cost of a sync round proportional to live state instead of to the repository's age.
+Implemented by `T-050` (`meshtree_core::lease::compact`, `CoordStore::with_compaction`). Compaction keeps the cost of a sync round proportional to live state instead of to the repository's age.
 
 - **Horizon.** `COMPACT_HORIZON = max(24 h, 4 × (ttl_secs + 2 × skew_grace_secs))`. An event `e` is foldable iff `e.ts ≤ newest.ts − COMPACT_HORIZON`, where `newest` is the newest event **in the log**, never the wall clock.
 - **Watermark.** `W` is the greatest ordering key among foldable events. The snapshot is the replay state after folding every event with key ≤ `W` (onto the previous snapshot, if any).
@@ -255,7 +255,7 @@ Two patterns conflict when either matches the other's canonical literal (wildcar
 - **Commit.** A compaction is an ordinary sync round (§6): it replaces `snapshot/` and removes the folded `log/` files in one commit.
 - **Concurrent snapshots.** When two tips carry different snapshots, the larger `W` wins and events with key ≤ that `W` are dropped from the union.
 - **Late events.** An event that reaches the ref after a compaction passed it (its machine was offline for longer than the horizon) is dropped. The originating daemon detects on its next sync that its WAL-journaled event is absent from the ref and below `W`, and re-issues it as a fresh event with a new id and key. A re-issued `ACQUIRE` wins or is rejected (`MT-001`) exactly like a fresh claim.
-- **Invariant.** `replay(compact(L)) == replay(L)` for every log `L`.
+- **Invariant.** `replay(compact(L)) == replay(L)` for every log `L`: the lease table is byte-identical; rejections of folded events are kept as ids in the snapshot's `rejected`, and replay reports full rejections for the events above `W` (`compaction_replay_equivalence_props`).
 - **History.** Folded events remain reachable in git history (`git log -p refs/meshtree/coord`); only the current tree forgets them.
 
 ## 6. Sync rounds and CAS

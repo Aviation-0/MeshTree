@@ -280,13 +280,15 @@ fn claim_local(opts: &Options) -> Result<Row, String> {
         target: "p95 < 50 ms",
         measured: parts
             .iter()
-            .map(|(n, p95, _)| format!("p95 {:.1} ms ({n} logged events)", ms(*p95)))
+            .map(|(n, p95, _)| format!("p95 {:.1} ms ({n} lifetime events)", ms(*p95)))
             .collect::<Vec<_>>()
             .join("; "),
         pass: worst < Duration::from_millis(50),
         notes: format!(
-            "{} `claim_paths` IPC round trips per log size (each a coordination-ref \
-             commit, no remote; the log is pre-seeded so history cost shows); medians {}",
+            "{} `claim_paths` IPC round trips per history size (the log is pre-seeded \
+             with acquire/release pairs older than the compaction horizon, as a \
+             long-lived repository accrues them; the daemon compacts them, ADR-0010; \
+             no remote); medians {}",
             opts.claim_samples,
             parts
                 .iter()
@@ -297,31 +299,46 @@ fn claim_local(opts: &Options) -> Result<Row, String> {
     })
 }
 
-/// Logged-event counts the local claim is measured at (`ADR-0009`: the
-/// cost must not grow with history).
-const LOG_SIZES: [usize; 2] = [100, 2_000];
+/// Lifetime-event counts the local claim is measured at (`ADR-0009`,
+/// `ADR-0010`: claim cost must not grow with history; §18 "≥ 10,000 lifetime
+/// events").
+const LOG_SIZES: [usize; 3] = [100, 2_000, 10_000];
 
-/// Pre-seeds `refs/meshtree/coord` with `n` ACQUIREs on distinct paths held
-/// by an unrelated task, in one sync round.
+/// Pre-seeds `refs/meshtree/coord` with `n` events of finished history:
+/// ACQUIRE/RELEASE pairs on distinct paths by an unrelated task, spread over
+/// the 30 days ending two days ago (older than the compaction horizon), in
+/// one sync round without compaction.
 fn seed_log(root: &Path, n: usize) -> Result<(), String> {
     use meshtree_core::lease::{EventType, LeaseEvent, ReplayConfig};
     use meshtree_core::{TaskId, TaskIdAllocator, Timestamp};
+    const DAY_MS: u64 = 24 * 60 * 60 * 1000;
     let holder = TaskId::from_ulid(1);
     let mut alloc = TaskIdAllocator::new();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_millis() as u64;
+    let start = now - 32 * DAY_MS;
+    let step = (30 * DAY_MS / n.max(1) as u64).max(1);
     let events: Vec<LeaseEvent> = (0..n)
-        .map(|i| LeaseEvent {
-            id: alloc.allocate(now, i as u128 + 1).as_str()[2..].to_string(),
-            kind: EventType::Acquire,
-            path: format!("seed/{i}/**"),
-            task: holder.clone(),
-            machine: "mc-bench-seed".to_string(),
-            ts: Timestamp::from_unix_ms(now),
-            counter: i as u64,
-            ttl_secs: Some(900),
+        .map(|i| {
+            let pair = (i / 2) as u64;
+            let ms = start + pair * 2 * step + (i % 2) as u64;
+            let kind = if i % 2 == 0 {
+                EventType::Acquire
+            } else {
+                EventType::Release
+            };
+            LeaseEvent {
+                id: alloc.allocate(ms, i as u128 + 1).as_str()[2..].to_string(),
+                kind,
+                path: format!("seed/{pair}/**"),
+                task: holder.clone(),
+                machine: "mc-bench-seed".to_string(),
+                ts: Timestamp::from_unix_ms(ms),
+                counter: i as u64,
+                ttl_secs: (kind == EventType::Acquire).then_some(900),
+            }
         })
         .collect();
     let store = meshtree_platform::coord::CoordStore::new(

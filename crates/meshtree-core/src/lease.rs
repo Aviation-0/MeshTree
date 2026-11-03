@@ -170,100 +170,271 @@ pub struct Replay {
 ///
 /// 1. Union: events are de-duplicated by `id`.
 /// 2. Sort by the ordering key (see [`LeaseEvent::total_cmp`]).
-/// 3. Replay:
-///    - `ACQUIRE` wins if no *other* task holds a live lease on a conflicting
-///      path (`conflicts`, or identical path); expired conflicting leases are
-///      dropped. A re-`ACQUIRE` by the holder refreshes the lease. A loss is
-///      recorded as a [`Rejection`] (`MT-001`).
-///    - `RELEASE` by the holder removes the lease; otherwise ignored.
-///    - `HEARTBEAT` by the holder refreshes a live lease; a heartbeat after
-///      expiry does not revive it (the holder must re-acquire, `MT-002`).
-///    - `EXPIRE_SWEEP` removes the named holder's lease only if it is expired
-///      at the sweep's timestamp; idempotent.
+/// 3. Replay each event with [`apply`].
 pub fn replay<F>(events: &[LeaseEvent], config: &ReplayConfig, conflicts: F) -> Replay
 where
     F: Fn(&str, &str) -> bool,
 {
-    let mut sorted: Vec<&LeaseEvent> = events.iter().collect();
+    replay_from(None, events, config, conflicts)
+}
+
+/// [`replay`] starting from a compaction snapshot (`SPEC.md` §9, `ADR-0010`):
+/// the state at the watermark `W`, then every event whose ordering key is
+/// above `W`, in order. Events at or below `W` are already folded into the
+/// snapshot and are ignored.
+pub fn replay_from<F>(
+    snapshot: Option<&Snapshot>,
+    events: &[LeaseEvent],
+    config: &ReplayConfig,
+    conflicts: F,
+) -> Replay
+where
+    F: Fn(&str, &str) -> bool,
+{
+    let mut out = snapshot.map(Snapshot::state).unwrap_or_default();
+    for ev in ordered_above(snapshot.map(|s| &s.watermark), events) {
+        apply(&mut out, ev, config, &conflicts);
+    }
+    out
+}
+
+/// `events` de-duplicated by id, sorted by [`LeaseEvent::total_cmp`], without
+/// those a watermark covers.
+fn ordered_above<'a>(
+    watermark: Option<&Watermark>,
+    events: &'a [LeaseEvent],
+) -> Vec<&'a LeaseEvent> {
+    let mut sorted: Vec<&LeaseEvent> = events
+        .iter()
+        .filter(|ev| !watermark.is_some_and(|w| w.covers(ev)))
+        .collect();
     sorted.sort_by(|a, b| a.total_cmp(b));
     let mut seen = BTreeSet::new();
     sorted.retain(|ev| seen.insert(ev.id.as_str()));
+    sorted
+}
 
+/// Applies one event to the replay state (§9):
+///
+/// - `ACQUIRE` wins if no *other* task holds a live lease on a conflicting
+///   path (`conflicts`, or identical path); expired conflicting leases are
+///   dropped. A re-`ACQUIRE` by the holder refreshes the lease. A loss is
+///   recorded as a [`Rejection`] (`MT-001`).
+/// - `RELEASE` by the holder removes the lease; otherwise ignored.
+/// - `HEARTBEAT` by the holder refreshes a live lease; a heartbeat after
+///   expiry does not revive it (the holder must re-acquire, `MT-002`).
+/// - `EXPIRE_SWEEP` removes the named holder's lease only if it is expired
+///   at the sweep's timestamp; idempotent.
+///
+/// Replay is a fold of `apply` over the ordered events, so a caller holding
+/// the state of a prefix may extend it with later events.
+pub fn apply<F>(state: &mut Replay, ev: &LeaseEvent, config: &ReplayConfig, conflicts: &F)
+where
+    F: Fn(&str, &str) -> bool,
+{
     let grace = config.skew_grace_secs;
-    let mut out = Replay::default();
-    for ev in sorted {
-        match ev.kind {
-            EventType::Acquire => {
-                let mut expired = Vec::new();
-                let mut holder = None;
-                for lease in out.leases.values() {
-                    if lease.task == ev.task
-                        || !(lease.path == ev.path || conflicts(&lease.path, &ev.path))
-                    {
-                        continue;
-                    }
-                    if lease.is_expired_at(ev.ts, grace) {
-                        expired.push(lease.path.clone());
-                    } else if holder.is_none() {
-                        holder = Some(lease);
-                    }
-                }
-                if let Some(lease) = holder {
-                    out.rejected.push(Rejection {
-                        code: ERROR_CODE_CLAIM_CONFLICT.to_string(),
-                        event: ev.id.clone(),
-                        path: ev.path.clone(),
-                        task: ev.task.clone(),
-                        machine: ev.machine.clone(),
-                        holder: lease.task.clone(),
-                        holder_path: lease.path.clone(),
-                    });
+    match ev.kind {
+        EventType::Acquire => {
+            let mut expired = Vec::new();
+            let mut holder = None;
+            for lease in state.leases.values() {
+                if lease.task == ev.task
+                    || !(lease.path == ev.path || conflicts(&lease.path, &ev.path))
+                {
                     continue;
                 }
-                for path in expired {
-                    out.leases.remove(&path);
+                if lease.is_expired_at(ev.ts, grace) {
+                    expired.push(lease.path.clone());
+                } else if holder.is_none() {
+                    holder = Some(lease);
                 }
-                let ttl_secs = ev.ttl_secs.unwrap_or(config.default_ttl_secs);
-                let acquired_at = match out.leases.get(&ev.path) {
-                    Some(own) if !own.is_expired_at(ev.ts, grace) => own.acquired_at,
-                    _ => ev.ts,
+            }
+            if let Some(lease) = holder {
+                let rejection = Rejection {
+                    code: ERROR_CODE_CLAIM_CONFLICT.to_string(),
+                    event: ev.id.clone(),
+                    path: ev.path.clone(),
+                    task: ev.task.clone(),
+                    machine: ev.machine.clone(),
+                    holder: lease.task.clone(),
+                    holder_path: lease.path.clone(),
                 };
-                out.leases.insert(
-                    ev.path.clone(),
-                    Lease {
-                        path: ev.path.clone(),
-                        task: ev.task.clone(),
-                        machine: ev.machine.clone(),
-                        acquired_at,
-                        ttl_secs,
-                        last_heartbeat: ev.ts,
-                    },
-                );
+                state.rejected.push(rejection);
+                return;
             }
-            EventType::Release => {
-                if out.leases.get(&ev.path).is_some_and(|l| l.task == ev.task) {
-                    out.leases.remove(&ev.path);
-                }
+            for path in expired {
+                state.leases.remove(&path);
             }
-            EventType::Heartbeat => {
-                if let Some(lease) = out.leases.get_mut(&ev.path) {
-                    if lease.task == ev.task && !lease.is_expired_at(ev.ts, grace) {
-                        lease.last_heartbeat = lease.last_heartbeat.max(ev.ts);
-                    }
-                }
+            let ttl_secs = ev.ttl_secs.unwrap_or(config.default_ttl_secs);
+            let acquired_at = match state.leases.get(&ev.path) {
+                Some(own) if !own.is_expired_at(ev.ts, grace) => own.acquired_at,
+                _ => ev.ts,
+            };
+            state.leases.insert(
+                ev.path.clone(),
+                Lease {
+                    path: ev.path.clone(),
+                    task: ev.task.clone(),
+                    machine: ev.machine.clone(),
+                    acquired_at,
+                    ttl_secs,
+                    last_heartbeat: ev.ts,
+                },
+            );
+        }
+        EventType::Release => {
+            if state
+                .leases
+                .get(&ev.path)
+                .is_some_and(|l| l.task == ev.task)
+            {
+                state.leases.remove(&ev.path);
             }
-            EventType::ExpireSweep => {
-                if out
-                    .leases
-                    .get(&ev.path)
-                    .is_some_and(|l| l.task == ev.task && l.is_expired_at(ev.ts, grace))
-                {
-                    out.leases.remove(&ev.path);
+        }
+        EventType::Heartbeat => {
+            if let Some(lease) = state.leases.get_mut(&ev.path) {
+                if lease.task == ev.task && !lease.is_expired_at(ev.ts, grace) {
+                    lease.last_heartbeat = lease.last_heartbeat.max(ev.ts);
                 }
             }
         }
+        EventType::ExpireSweep => {
+            if state
+                .leases
+                .get(&ev.path)
+                .is_some_and(|l| l.task == ev.task && l.is_expired_at(ev.ts, grace))
+            {
+                state.leases.remove(&ev.path);
+            }
+        }
     }
-    out
+}
+
+/// The §9 ordering key `(ts, counter, machine, id)` of one event, owned: a
+/// compaction watermark (`ADR-0010`). Field order makes the derived `Ord`
+/// the ordering key's.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Watermark {
+    pub ts: Timestamp,
+    pub counter: u64,
+    pub machine: String,
+    pub id: String,
+}
+
+impl Watermark {
+    /// The key of `event`.
+    pub fn of(event: &LeaseEvent) -> Self {
+        Self {
+            ts: event.ts,
+            counter: event.counter,
+            machine: event.machine.clone(),
+            id: event.id.clone(),
+        }
+    }
+
+    /// `true` if `event`'s key is at or below this watermark (folded).
+    pub fn covers(&self, event: &LeaseEvent) -> bool {
+        event.ordering_key()
+            <= (
+                self.ts,
+                self.counter,
+                self.machine.as_str(),
+                self.id.as_str(),
+            )
+    }
+}
+
+/// `snapshot/<W>.json` (`SPEC.md` §5, §9, `ADR-0010`; format in
+/// `docs/protocol.md` §3.5): the lease table after folding every event up
+/// to the watermark, so `replay_from(snapshot, events above W)` derives the
+/// same table as `replay(all events)`, byte for byte. The table is kept
+/// whole, in path order (expired entries nothing has removed yet included:
+/// expiry is decided at the next event's timestamp). Rejections of folded
+/// events are kept as ids only, for audit; replay reports full
+/// [`Rejection`]s for the events above `W`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Ordering key of the newest folded event.
+    pub watermark: Watermark,
+    /// The lease table at `W`, in path order.
+    pub leases: Vec<Lease>,
+    /// Ids of folded `ACQUIRE`s that were rejected, in replay order.
+    pub rejected: Vec<String>,
+}
+
+impl Snapshot {
+    /// The replay state it starts from: its table, no rejections.
+    pub fn state(&self) -> Replay {
+        Replay {
+            leases: self
+                .leases
+                .iter()
+                .map(|l| (l.path.clone(), l.clone()))
+                .collect(),
+            rejected: Vec::new(),
+        }
+    }
+}
+
+/// A compaction runs once more than this many events are foldable
+/// (`ADR-0010`).
+pub const COMPACT_THRESHOLD: usize = 1_000;
+
+/// How far behind the log's newest event an event must be to be folded:
+/// `max(24 h, 4 × (ttl_secs + 2 × skew_grace_secs))` (`ADR-0010`).
+pub fn compact_horizon_secs(config: &ReplayConfig) -> u64 {
+    let lease = config
+        .default_ttl_secs
+        .saturating_add(config.skew_grace_secs.saturating_mul(2));
+    lease.saturating_mul(4).max(24 * 60 * 60)
+}
+
+/// Compaction (`SPEC.md` §9, `ADR-0010`): folds every event with
+/// `ts ≤ newest.ts − horizon` (`newest` taken from the events themselves,
+/// never a clock) onto `snapshot`, when more than `threshold` such events
+/// exist. Returns the new snapshot (watermark = key of the newest folded
+/// event) and the events above it, or `None` when there is not enough to
+/// fold. Every machine holding the same events derives the same result, and
+/// `replay_from(new, rest)` derives the same table as
+/// `replay_from(snapshot, events)`; rejections of the folded events move into
+/// the snapshot's `rejected` ids.
+pub fn compact<F>(
+    snapshot: Option<&Snapshot>,
+    events: &[LeaseEvent],
+    config: &ReplayConfig,
+    conflicts: F,
+    threshold: usize,
+) -> Option<(Snapshot, Vec<LeaseEvent>)>
+where
+    F: Fn(&str, &str) -> bool,
+{
+    let ordered = ordered_above(snapshot.map(|s| &s.watermark), events);
+    let newest = ordered.iter().map(|ev| ev.ts).max()?;
+    let cutoff = newest
+        .unix_ms()
+        .checked_sub(compact_horizon_secs(config).saturating_mul(1000))?;
+    // Sorted by key, whose first component is `ts`: the foldable events are
+    // a prefix.
+    let fold = ordered
+        .iter()
+        .take_while(|ev| ev.ts.unix_ms() <= cutoff)
+        .count();
+    if fold <= threshold {
+        return None;
+    }
+    let mut state = snapshot.map(Snapshot::state).unwrap_or_default();
+    for ev in &ordered[..fold] {
+        apply(&mut state, ev, config, &conflicts);
+    }
+    let mut rejected = snapshot.map(|s| s.rejected.clone()).unwrap_or_default();
+    rejected.extend(state.rejected.into_iter().map(|r| r.event));
+    let compacted = Snapshot {
+        watermark: Watermark::of(ordered[fold - 1]),
+        leases: state.leases.into_values().collect(),
+        rejected,
+    };
+    let rest = ordered[fold..].iter().map(|ev| (*ev).clone()).collect();
+    Some((compacted, rest))
 }
 
 #[cfg(test)]

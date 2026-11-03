@@ -18,8 +18,8 @@ pub use config::{
     ShareConfig, ShareStrategy, ERROR_CODE_CONFIG_INVALID,
 };
 pub use lease::{
-    replay, EventType, Lease, LeaseEvent, LeaseTable, Rejection, Replay, ReplayConfig,
-    ERROR_CODE_CLAIM_CONFLICT,
+    replay, EventType, Lease, LeaseEvent, LeaseTable, Rejection, Replay, ReplayConfig, Snapshot,
+    Watermark, ERROR_CODE_CLAIM_CONFLICT,
 };
 pub use pattern::{conflicts, conflicts_raw, normalize, PatternError};
 pub use task::{
