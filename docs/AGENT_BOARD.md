@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-047 (publish merge-gate/sweeper status to coord registry)
-- Status: doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-02 | Claude Opus 5.5 (Windows): T-047 done (37/49). Daemon transitions (collect edges, recovery, sweeper abandon) publish tasks/<id>.json best-effort; recovery publishes deferred until serving.
+    CI green (run 41559983307). Next: T-045 (human), T-048.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): ADR-0009 Accepted (both parts) by Lucas Pan; SPEC §9/§10/§15 amended; T-048 (O(changes) sync) + T-049 (in-memory claims, WAL events, async commit) added to M4.
     Totals 36/49. Next: T-045 (human), T-047, T-048.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): ADR-0009 Proposed: local claim p95. Cause: sync round = ~2N+L+8 git procs (O(log)). Part 1 O(changes) sync; Part 2 in-memory claim + WAL events + async commit (<=250 ms).
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
     CI green (run 41557533637). Full-scale run pending on Mac. Next: T-045 (human), T-047.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-029 done (35/46). full_lifecycle + two-agent (MCP+CLI) zero-overwrite E2E green. Session did T-032/039/040/043/029.
     CI green (run 41552296766). Next: T-045 (human), T-034. Open: registry publish on merge/sweep.
-- - 2026-11-02 | Claude Opus 5.5 (Windows): T-043 done (34/46). refs/meshtree/coord tasks/<id>.json registry via CoordStore::sync_with (revision-wins merge); spawn/failed spawn/abort publish. Open: merge gate + sweeper do not publish yet.
-    CI green (run 41551357771). Next: T-029.
