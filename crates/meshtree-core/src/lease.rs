@@ -116,6 +116,19 @@ impl Lease {
 /// Derived lease table, keyed by normalized path (deterministic order).
 pub type LeaseTable = BTreeMap<String, Lease>;
 
+/// Leases an observer may sweep at `now` (the observer's own clock): those
+/// past `last_heartbeat + ttl + grace` by the holder's timestamps (`SPEC.md`
+/// §9), in path order. Emitting an `EXPIRE_SWEEP` for each is always safe:
+/// replay re-checks expiry at the sweep's own timestamp, so a sweep from a
+/// clock running fast by up to `skew_grace_secs` is a no-op, and repeated
+/// sweeps are idempotent.
+pub fn sweep_candidates(table: &LeaseTable, now: Timestamp, skew_grace_secs: u64) -> Vec<&Lease> {
+    table
+        .values()
+        .filter(|lease| lease.is_expired_at(now, skew_grace_secs))
+        .collect()
+}
+
 /// An `ACQUIRE` that lost to a live conflicting lease (kept for audit, §9).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rejection {
@@ -290,6 +303,27 @@ mod tests {
             counter: 0,
             ttl_secs: None,
         }
+    }
+
+    #[test]
+    fn sweep_candidates_are_expired_leases_in_path_order() {
+        use EventType::*;
+        let (a, b) = tasks();
+        let log = vec![
+            ev("01", Acquire, "z/**", &a, "mc-a", 1_000),
+            ev("02", Acquire, "m/**", &b, "mc-b", 1_000),
+            ev("03", Acquire, "a/**", &a, "mc-a", 1_000),
+            ev("04", Heartbeat, "m/**", &b, "mc-b", 2_000),
+        ];
+        let table = replay(&log, &CONFIG, exact).leases;
+        let deadline = 1_000 + CONFIG.default_ttl_secs + CONFIG.skew_grace_secs;
+        let at = |secs: u64| Timestamp::from_unix_ms(secs * 1000);
+        assert!(sweep_candidates(&table, at(deadline), CONFIG.skew_grace_secs).is_empty());
+        let paths: Vec<&str> = sweep_candidates(&table, at(deadline + 1), CONFIG.skew_grace_secs)
+            .iter()
+            .map(|l| l.path.as_str())
+            .collect();
+        assert_eq!(paths, ["a/**", "z/**"], "heartbeaten m/** is still live");
     }
 
     /// Holder and observer clocks are offset from real time by `dh` / `dobs`
