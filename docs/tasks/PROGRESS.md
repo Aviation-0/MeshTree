@@ -5,12 +5,13 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M4 — Chaos Suite, Coverage Gate & Technical Docs` (M2 done; M3 awaits human `T-045`)
-- **In-Progress Task (`doing`):** `T-049` — daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2) (Claude Opus 5.5, Windows); `T-042` — MCP directory listing manifest (Claude Opus 5.5, Mac)
+- **In-Progress Task (`doing`):** `T-042` — MCP directory listing manifest (Claude Opus 5.5, Mac)
 - **Next Up (`todo`, dependencies satisfied):**
   1. `T-042` — MCP directory listing manifest
-  2. `T-050` — Coordination-log compaction (`ADR-0010`; after `T-049`); `T-053` — daemon emits `EXPIRE_SWEEP` (after `T-049`)
+  2. `T-050` — Coordination-log compaction (`ADR-0010`; unblocked by `T-049`); `T-053` — daemon emits `EXPIRE_SWEEP` (unblocked)
   3. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; now gates `T-037`)
-- **Latest (2026-11-03, Claude Opus 5.5, Mac):** `T-035` done (44/54) — dist release pipeline, cargo-audit gate, Homebrew/Scoop/winget publishing gated on secrets, `meshtree-mcp` npx shim; CI run 41700134955 green; `T-054` done (Unix socket bind hardening).
+- **Latest (2026-11-03, Claude Opus 5.5, Windows):** `T-049` done — the daemon decides claims in memory, journals their events to the WAL (one `fsync`) before answering, and commits/pushes in the background within 25 ms; core `conflicts_raw` gained a segment-wise fast negative; local-claim p95 at 100 logged events 4.6 / 26.2 / 25.1 ms (Linux / macOS / Windows); the 2,000-event row moved to `T-050`; CI run 41737248886 green on all 3 OSes.
+- **Earlier (2026-11-03, Claude Opus 5.5, Mac):** `T-035` done (44/54) — dist release pipeline, cargo-audit gate, Homebrew/Scoop/winget publishing gated on secrets, `meshtree-mcp` npx shim; CI run 41700134955 green; `T-054` done (Unix socket bind hardening).
 - **Before that:** `T-052` done (42/53) — `[agents] max_lines`, `[queue.*] ticket_ttl_secs`, OS machine-id derivation (`platform::machine`), `.venv` policy; CI run 41688661711 green.
 - **Earlier:** `T-033` done (41/53) — `docs/protocol.md` + `docs/architecture.md` with every JSON example parsed against the code types (`docs_json_examples_parse_against_core_types`); CI run 41683066476 green.
 - **Previous:** `T-031` done (40/53) — §17 security suite (queue overrides, `.meshtree` claims, Unix socket directory, Windows pipe DACL read-back) and CI-enforced `meshtree-core` coverage ≥ 85% (97.0% today); CI run 41668611341 green.
@@ -46,10 +47,10 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 4 | 0 | 0 | 0 | `done` |
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 12 | 0 | 0 | 0 | `done` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 8 | 0 | 0 | 1 | `doing` |
-| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047`–`T-050`, `T-052`–`T-054` | 11 | 8 | 1 | 0 | 2 | `doing` |
+| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047`–`T-050`, `T-052`–`T-054` | 11 | 9 | 0 | 0 | 2 | `doing` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042`, `T-051` | 6 | 3 | 1 | 0 | 2 | `doing` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-054`** | **54** | **45** | **2** | **0** | **7** | **83% (`45 / 54`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-054`** | **54** | **46** | **1** | **0** | **7** | **85% (`46 / 54`)** |
 
 ---
 

@@ -8,9 +8,6 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-049 (daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2))
-- Status: doing
 - Model: Claude Opus 5.5 (Mac)
 - Task: T-042 (MCP directory listing manifest)
 - Status: doing
@@ -27,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-03 | Claude Opus 5.5 (Windows): T-049 done. In-memory daemon claims, WAL events (single fsync), 25 ms background commit, serialized coord writes, core segment-wise fast negative. Claim p95 @100 ev 4.6/26.2/25.1 ms (L/M/W).
+    CI green (run 41737248886). 2,000-ev row moved to T-050. Unblocked: T-050, T-053.
 - - 2026-11-03 | Claude Opus 5.5 (Windows): T-049 IN PROGRESS (lock held). Core segment-wise fast negative, serialized coord writes, single-fsync WAL batch; CI green. Claim p95 @2000 ev 60/118/92 ms (L/M/W) still > 50.
     Remaining cost = full-log background flush (T-050). Needs Lucas: move 2,000-ev row to T-050 exit, or more bench samples.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-041 done (45/54). MIT OR Apache-2.0, crates.io metadata + READMEs, versioned path deps, CI publish dry-run job.
@@ -35,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41700134955). Unverified until first tag: release run, shim download, Windows zip layout. Next: T-041, T-042.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-054 done (43/54). Unix socket dir checked before bind; socket bound as .t<pid>, chmod 0600, renamed into place. security_ipc extended.
   CI green (run 41698423294). Next: T-035 in progress.
-- 2026-11-03 | Claude Opus 5.5 (Mac): T-052 done (42/53). [agents] max_lines, [queue.*] ticket_ttl_secs, platform::machine (mc-<sha1 of OS id>), .venv policy doc.
-  CI green (run 41688661711). Next: T-035 (cargo-dist/Node approved), socket bind hardening; T-050/T-053 after T-049.
