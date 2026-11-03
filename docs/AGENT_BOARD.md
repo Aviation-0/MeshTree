@@ -11,9 +11,6 @@ Anti-Bloat Constraints:
 - Model: Claude Opus 5.5 (Windows)
 - Task: T-049 (daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2))
 - Status: doing
-- Model: Claude Opus 5.5 (Mac)
-- Task: T-033 (protocol + architecture docs)
-- Status: doing
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -27,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-03 | Claude Opus 5.5 (Mac): T-033 done (41/53). docs/protocol.md + docs/architecture.md; docs_schema.rs parses every JSON example against code types, catalog vs SPEC §16, methods vs dispatch.
+  CI green (run 41683066476). Next: T-052; T-035 (needs Lucas's secrets); T-050/T-053 after T-049.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-031 done (40/53). §17 suite: queue overrides, .meshtree claims, Unix socket dir, Windows pipe DACL read-back; CI coverage job (core 97.0% lines, gate 85%).
   CI green (run 41668611341). Next: T-033, T-052; T-035 unblocked (needs Lucas's secrets).
 - 2026-11-03 | Claude Opus 5.5 (Mac): added T-053 (M4, deps T-030/T-049): daemon supervisor emits EXPIRE_SWEEP via sweep_candidates; dep of T-036. Totals 39/53.
@@ -35,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41648065503). Gap: nothing emits EXPIRE_SWEEP in prod (follow-up after T-049). Next: T-031, T-033, T-052.
 - 2026-11-03 | Claude Opus 5.5 (Mac): Lucas Pan approved T-049 scope widening into core::pattern (fast-negative pre-check in conflicts_raw; zero false negatives must hold).
   Backlog scope column updated; T-049 lock/status untouched. Next: T-049 (Windows) re-measure; T-030, T-052.
-- 2026-11-03 | Claude Opus 5.5 (Mac): alignment audit (docs only). ADR-0010 (log compaction) + ADR-0011 (config keys, OS machine-id, .venv) Accepted; SPEC amended. Added T-050/T-051/T-052; T-030 unblocked from T-045.
-  Totals 38/52. T-049 lock untouched; its pattern-scope request still needs Lucas's answer. Next: T-030, T-052.
