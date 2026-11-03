@@ -5,9 +5,13 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate` (Week 3 · Target: `2026-11-22`)
-- **In-Progress Task (`doing`):** `T-029` — full lifecycle and two-agent MVP E2E tests (Claude Opus 5.5, Windows)
+- **In-Progress Task (`doing`):** None
 - **Next Up (`todo`, dependencies satisfied):**
-- **Latest (2026-11-02, Claude Opus 5.5, Windows):** `T-043` done (34/46) — cross-machine task registry `tasks/<id>.json` in `refs/meshtree/coord` (revision-wins merge across tips); `spawn`, failed spawns and `abort` publish through the CAS sync; merge/sweeper publishing still open; CI run 41551357771 green on all 3 OSes.
+  1. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; gates `T-030`) (`docs/mvp-acceptance.md`)
+  2. `T-034` — `xtask` reproducible benchmark suite (all 6 §18 scenarios) (`xtask/**`)
+  - Follow-up candidate (not yet a backlog task): publish merge-gate and sweeper status changes to the coord task registry (`T-043` open note)
+- **Latest (2026-11-02, Claude Opus 5.5, Windows):** `T-029` done (35/46) — `full_lifecycle_spawn_claim_handoff_collect_merged` and `two_agents_mcp_and_cli_parallel_session_zero_overwrites` green on all 3 OSes (CI run 41552296766). This session also closed `T-032`, `T-039`, `T-040`, `T-043`; M2 is complete. MVP gate still needs the human-run `T-045`.
+- **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-043` done (34/46) — cross-machine task registry `tasks/<id>.json` in `refs/meshtree/coord` (revision-wins merge across tips); `spawn`, failed spawns and `abort` publish through the CAS sync; merge/sweeper publishing still open; CI run 41551357771 green on all 3 OSes.
 - **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-040` done (33/46) — a granted queue slot lapses `lease.ttl_secs` after its grant even with a live holder, and the next FIFO ticket is granted at that instant (injected-clock test + daemon test); CI run 41550700924 green on all 3 OSes.
 - **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-039` done (32/46) — `collect` publishes the integration branch to `origin` with a `--force-with-lease` push; a lost race refetches, replay-merges and retries (bounded ×5, then `MT-031`); network failures defer the push; two-clone race test; CI run 41549927497 green on all 3 OSes.
 - **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-032` done (31/46) — junction/symlink/clonefile realpath probe matrix (`share_junction_realpath_probe_matrix`) and `docs/compatibility.md` with per-tool `strategy = "none"` recipes; Windows resolves `<junction>/..` lexically, POSIX physically; CI run 41548903359 green on all 3 OSes.
@@ -32,11 +36,11 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M0 — Walking Skeleton & Core Lease Foundations** | Week 1 (`→ 2026-11-08`) | `T-001`–`T-010` | 10 | 10 | 0 | 0 | 0 | `done` |
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 4 | 0 | 0 | 0 | `done` |
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 12 | 0 | 0 | 0 | `done` |
-| **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 7 | 1 | 0 | 1 | `doing` |
+| **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 8 | 0 | 0 | 1 | `doing` |
 | **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033` | 4 | 1 | 0 | 0 | 3 | `doing` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042` | 5 | 0 | 0 | 0 | 5 | `todo` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **34** | **1** | **0** | **11** | **74% (`34 / 46`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-046`** | **46** | **35** | **0** | **0** | **11** | **76% (`35 / 46`)** |
 
 ---
 
@@ -47,7 +51,7 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 - [x] **Singleton daemon lock:** `chaos_stale_daemon_lock_live_vs_dead_pid_adoption` green on 3-OS CI (`T-016`, run 41215529894)
 - [x] **Daemon & Crash Safety:** `chaos_sigkill_daemon_mid_merge_recovers_under_2s` green (`< 2 s`, 0 orphaned `index.lock`) (`T-021`, run 41226059939)
 - [x] **Windows NTFS Teardown:** `windows_locked_handle_quarantines_never_fails_merge` green on Windows CI (`T-025`, run 41228444158; `ADR-0006`)
-- [ ] **4-Week MVP Exit:** `full_lifecycle_spawn_claim_handoff_collect_merged` + `two_agents_mcp_and_cli_parallel_session_zero_overwrites` (`T-029`) + real two-agent run (`T-045`, human-in-the-loop)
+- [ ] **4-Week MVP Exit** (automated half green: `T-029`, CI run 41552296766; awaiting human `T-045`): `full_lifecycle_spawn_claim_handoff_collect_merged` + `two_agents_mcp_and_cli_parallel_session_zero_overwrites` (`T-029`) + real two-agent run (`T-045`, human-in-the-loop)
 - [ ] **Core Coverage Bar:** CI-enforced `meshtree-core` coverage `≥ 85%` (`T-031`)
 - [ ] **Benchmark Suite:** All 6 `SPEC.md` §18 metrics reproduced via `xtask bench` (`T-034`)
 - [ ] **v1.0 Packaging:** 3-OS static binaries, Homebrew tap, Scoop/winget, and `npx meshtree-mcp` verified (`T-035`, `T-037`, `T-038`)

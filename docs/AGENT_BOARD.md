@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-029 (full lifecycle and two-agent MVP E2E tests)
-- Status: doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-02 | Claude Opus 5.5 (Windows): T-029 done (35/46). full_lifecycle + two-agent (MCP+CLI) zero-overwrite E2E green. Session did T-032/039/040/043/029.
+    CI green (run 41552296766). Next: T-045 (human), T-034. Open: registry publish on merge/sweep.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-043 done (34/46). refs/meshtree/coord tasks/<id>.json registry via CoordStore::sync_with (revision-wins merge); spawn/failed spawn/abort publish. Open: merge gate + sweeper do not publish yet.
     CI green (run 41551357771). Next: T-029.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-040 done (33/46). Queue slot lapses lease.ttl_secs after grant even with a live holder; next FIFO ticket granted at that instant. No §6 queue TTL key (ADR if wanted).
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
     CI green (run 41549927497). Next: T-040.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-032 done (31/46). share_junction_realpath_probe_matrix + docs/compatibility.md (npm/pnpm/Cargo/.venv/Vite/webpack/Next recipes). Windows junction ".." is lexical (task wt), POSIX physical (primary).
     CI green (run 41548903359). Next: T-039.
-- - 2026-11-02 | Claude Opus 5.5 (Windows): T-028 done (30/46). meshtree mcp: stateless stdio JSON-RPC proxy, 11 §15 tools, [MT-xxx] isError results (MT-010 no daemon), EOF exit leaves daemon. Daemon +spawn/abort/list/commit_handoff/render methods; claim ttl_secs.
-    CI green (run 41540486618). Open: §6 cap key; machine-id. Next: T-039.
