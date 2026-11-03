@@ -1,6 +1,6 @@
 # ADR-0009: Meeting the Local Claim Budget (p95 < 50 ms)
 
-- **Status:** Proposed (awaiting Lucas Pan)
+- **Status:** Accepted (accepted by Lucas Pan, 2026-11-02, both parts; `SPEC.md` §9, §10, §15 amended; implementation tracked as `T-048` (Part 1) and `T-049` (Part 2))
 - **Date:** 2026-11-02
 - **Author:** Claude Opus 5.5 (Agent)
 - **Authority:** `SPEC.md` §4 (git plumbing via the git CLI, not libgit2), §9 (event log, deterministic replay, CAS, "local operations are never blocked by network state"), §10 (daemon serializes clients; WAL crash safety), §18 (benchmark: claim acquire (local) p95 < 50 ms), §22; `AGENTS.md` Standing Order #1

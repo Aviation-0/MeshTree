@@ -294,6 +294,8 @@ git push origin refs/meshtree/coord --force-with-lease=refs/meshtree/coord:<expe
 
 On rejection (another machine won the race), the loser re-fetches, merges its pending events into the fetched tree, replays, and retries (bounded ×5 with jitter). **Local operations are never blocked by network state**: pushes and fetches are best-effort with a dirty-flush queue; `meshtree sync` forces a flush.
 
+**Daemon claim path (ADR-0009).** A sync round costs git subprocesses in proportion to what changed, never to the length of the log (decoded events are cached by blob OID, reads are batched, unchanged subtrees and blobs are reused; the derived tree bytes are unchanged). With a daemon running, `claim_paths` / `release_paths` are decided against the daemon's in-memory replay of the log, using the same conflict rule, so a local conflict is still an immediate `MT-001`. The new events (ULID, timestamp, counter) are appended to the WAL **before** the claim is acknowledged, and a background writer coalesces pending events into one coordination-ref commit and push within **250 ms** (immediately on `sync`, `collect`, heartbeat or shutdown). It also fetches every `heartbeat_secs / 4` (at most 30 s). A conflicting remote claim discovered after acknowledgement revokes the local claim through the replay rule above. A caller that wants the remote check up front passes `sync: true` (`meshtree claim --sync`), which answers only after the commit and push. Without a daemon, the CLI stays synchronous.
+
 ```mermaid
 sequenceDiagram
   participant A as Daemon A (macOS)
@@ -345,7 +347,7 @@ Request/response shape: `{"id": 7, "method": "claim_paths", "params": {…}}` �
 
 ### Crash safety
 
-The daemon journals state transitions (spawn/claim/collect/merge) to a write-ahead log inside `.meshtree/`; on restart it replays the WAL, adopts orphaned tasks, releases leases whose holder process no longer exists (pid + boot-id check), and re-enters idle. Target: crash recovery < 2 s, zero orphaned `index.lock`.
+The daemon journals state transitions (spawn/claim/collect/merge) to a write-ahead log inside `.meshtree/`; claim and release entries carry the full lease events (ADR-0009). On restart it replays the WAL, re-applies journaled lease events missing from `refs/meshtree/coord` (idempotent by event id, so an acknowledged claim is never lost), adopts orphaned tasks, releases leases whose holder process no longer exists (pid + boot-id check), and re-enters idle. Target: crash recovery < 2 s, zero orphaned `index.lock`.
 
 ---
 
@@ -436,7 +438,7 @@ The MCP process is a thin proxy: it holds no state, connects to the daemon over 
 | `spawn_task` | `name`, `base?`, `agent?`, `claims?[]` | `task_id`, `worktree_path`, `branch` |
 | `task_status` | `task_id?` | task record(s) |
 | `list_tasks` | `active_only?` | task records |
-| `claim_paths` | `task_id`, `paths[]`, `ttl_secs?` | granted/rejected per path |
+| `claim_paths` | `task_id`, `paths[]`, `ttl_secs?`, `sync?` | granted/rejected per path; `coord`: `pending` \| `committed` \| `pushed` (ADR-0009) |
 | `release_paths` | `task_id`, `paths[]` | released |
 | `request_shared_op` | `task_id`, `queue`, `command_override?` | `ticket_id`, `position`, `granted` |
 | `commit_handoff` | `task_id`, `objective?`, `state?`, `done?[]`, `next?[]`, `failing_tests?[]`, `decisions?[]`, `ruled_out?[]` | rendered `HANDOFF.md` path |
