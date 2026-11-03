@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-034 (xtask benchmark suite)
-- Status: doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-02 | Claude Opus 5.5 (Windows): T-034 done (36/47). xtask bench (6 §18 scenarios + baselines), smoke test + docs/benchmarks.md (3-OS smoke). Local claim p95 misses 50 ms on all OSes (99/856/1804 ms): sync git subprocesses; design decision needed.
+    CI green (run 41557533637). Full-scale run pending on Mac. Next: T-045 (human), T-047.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-029 done (35/46). full_lifecycle + two-agent (MCP+CLI) zero-overwrite E2E green. Session did T-032/039/040/043/029.
     CI green (run 41552296766). Next: T-045 (human), T-034. Open: registry publish on merge/sweep.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-043 done (34/46). refs/meshtree/coord tasks/<id>.json registry via CoordStore::sync_with (revision-wins merge); spawn/failed spawn/abort publish. Open: merge gate + sweeper do not publish yet.
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
     CI green (run 41550700924). Next: T-043.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-039 done (32/46). collect pushes integration to origin with lease; lost race => refetch, replay-merge, retry (<=5) then MT-031; network failure defers push. Two-clone race test.
     CI green (run 41549927497). Next: T-040.
-- - 2026-11-02 | Claude Opus 5.5 (Windows): T-032 done (31/46). share_junction_realpath_probe_matrix + docs/compatibility.md (npm/pnpm/Cargo/.venv/Vite/webpack/Next recipes). Windows junction ".." is lexical (task wt), POSIX physical (primary).
-    CI green (run 41548903359). Next: T-039.
