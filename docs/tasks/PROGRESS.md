@@ -5,12 +5,14 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M4 — Chaos Suite, Coverage Gate & Technical Docs` (M2 done; M3 awaits human `T-045`)
-- **In-Progress Tasks (`doing`):** `T-049` — daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2) (Claude Opus 5.5, Windows); `T-030` — chaos: ±30 min clock skew & four-clone CAS contention (Claude Opus 5.5, Mac)
+- **In-Progress Task (`doing`):** `T-049` — daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2) (Claude Opus 5.5, Windows)
 - **Next Up (`todo`, dependencies satisfied):**
-  1. `T-030` — Chaos tests: `±30 min` clock skew & four-clone CAS contention (unblocked 2026-11-03: no longer waits on `T-045`)
-  2. `T-052` — `ADR-0011` config keys, OS machine-id derivation & `.venv` policy
-  3. `T-050` — Coordination-log compaction (`ADR-0010`; after `T-049`)
-  4. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; now gates `T-037`)
+  1. `T-031` — §17 security suite + CI-enforced `meshtree-core` coverage ≥ 85%
+  2. `T-033` — `docs/protocol.md` + `docs/architecture.md`
+  3. `T-052` — `ADR-0011` config keys, OS machine-id derivation & `.venv` policy
+  4. `T-050` — Coordination-log compaction (`ADR-0010`; after `T-049`)
+  5. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; now gates `T-037`)
+- **Latest (2026-11-03, Claude Opus 5.5, Mac):** `T-030` done (39/52) — `sweep_candidates` + chaos tests for ±30 min skew (no premature sweep, audited idempotent sweeps) and four-clone CAS contention (bounded convergence, identical tables); CI run 41648065503 green on all 3 OSes. Gap: nothing emits `EXPIRE_SWEEP` in production yet (follow-up proposed).
 - **2026-11-03 alignment audit (Claude Opus 5.5, Mac; approved by Lucas Pan):** `ADR-0010` (log compaction) and `ADR-0011` (config keys, OS machine-id, `.venv`) **Accepted**; `SPEC.md` §5/§6/§9/§11/§12/§13/§18 amended. Added `T-050` (compaction), `T-051` (full-scale benchmark, run on the Mac), `T-052` (`ADR-0011`). `T-030` no longer depends on `T-045`; `T-037` now depends on `T-045` and `T-051`; `T-031` gains the §17 IPC tests; `T-033` covers `ADR-0008`/`0009`/`0010`. Totals 38/52.
 - **Latest (2026-11-02, Claude Opus 5.5, Windows):** `T-048` done (38/49) — coordination sync runs a constant ~10 git processes regardless of log length (batched reads/writes, blob reuse); small-log claims 2–4× faster, but claim time still grows with the log (in-process O(log) work), which `T-049` moves off the claim path; CI run 41561529557 green on all 3 OSes.
 - **Earlier (2026-11-02, Claude Opus 5.5, Windows):** `T-047` done (37/49) — every daemon-driven status change (collect edges, recovery, `ttl × 4` sweeper) now reaches the coordination-ref task registry; recovery publishes wait until the daemon serves; CI run 41559983307 green on all 3 OSes.
@@ -42,10 +44,10 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M1 — Cross-Machine Lease Protocol & CAS Sync** | Week 2 (`→ 2026-11-15`) | `T-011`–`T-014` | 4 | 4 | 0 | 0 | 0 | `done` |
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 12 | 0 | 0 | 0 | `done` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 8 | 0 | 0 | 1 | `doing` |
-| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047`–`T-050`, `T-052` | 9 | 3 | 2 | 0 | 4 | `doing` |
+| **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047`–`T-050`, `T-052` | 9 | 4 | 1 | 0 | 4 | `doing` |
 | **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042`, `T-051` | 6 | 1 | 0 | 0 | 5 | `doing` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-052`** | **52** | **38** | **2** | **0** | **12** | **73% (`38 / 52`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-052`** | **52** | **39** | **1** | **0** | **12** | **75% (`39 / 52`)** |
 
 ---
 

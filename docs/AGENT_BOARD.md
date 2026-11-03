@@ -11,9 +11,6 @@ Anti-Bloat Constraints:
 - Model: Claude Opus 5.5 (Windows)
 - Task: T-049 (daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2))
 - Status: doing
-- Model: Claude Opus 5.5 (Mac)
-- Task: T-030 (chaos: ±30 min clock skew & four-clone CAS contention)
-- Status: doing (2026-11-03)
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -27,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-03 | Claude Opus 5.5 (Mac): T-030 done (39/52). core sweep_candidates; chaos_skew.rs: ±30 min skew (no premature sweep, audited idempotent sweeps), 4-clone CAS contention converges.
+  CI green (run 41648065503). Gap: nothing emits EXPIRE_SWEEP in prod (follow-up after T-049). Next: T-031, T-033, T-052.
 - 2026-11-03 | Claude Opus 5.5 (Mac): Lucas Pan approved T-049 scope widening into core::pattern (fast-negative pre-check in conflicts_raw; zero false negatives must hold).
   Backlog scope column updated; T-049 lock/status untouched. Next: T-049 (Windows) re-measure; T-030, T-052.
 - 2026-11-03 | Claude Opus 5.5 (Mac): alignment audit (docs only). ADR-0010 (log compaction) + ADR-0011 (config keys, OS machine-id, .venv) Accepted; SPEC amended. Added T-050/T-051/T-052; T-030 unblocked from T-045.
@@ -35,5 +34,3 @@ Anti-Bloat Constraints:
   Next: widen scope to core::pattern fast-negative (needs OK), re-measure.
 - 2026-11-02 | Claude Opus 5.5 (Windows): T-048 done (38/49). Sync = const ~10 git procs (batched cat-file/hash-object, blob reuse). Claim time still O(log) in-process (877 ms Linux @2000 events); T-049 + future compaction ADR.
   CI green (run 41561529557). Next: T-049, T-045 (human).
-- 2026-11-02 | Claude Opus 5.5 (Windows): T-047 done (37/49). Daemon transitions (collect edges, recovery, sweeper abandon) publish tasks/<id>.json best-effort; recovery publishes deferred until serving.
-  CI green (run 41559983307). Next: T-045 (human), T-048.
