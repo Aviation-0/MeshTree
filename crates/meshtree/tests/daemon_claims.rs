@@ -86,9 +86,10 @@ fn daemon_claim_acknowledged_from_memory_then_committed_within_250ms() {
 
     // The writer commits it: the event reaches the ref, and the daemon
     // reports it waited at most 250 ms before committing (§9).
-    wait_for("the commit", Duration::from_secs(5), || logged(root) == 1);
+    wait_for("the commit", Duration::from_secs(5), || {
+        logged(root) == 1 && ok(root, "ping", json!({}))["pending_events"] == 0
+    });
     let ping = ok(root, "ping", json!({}));
-    assert_eq!(ping["pending_events"], 0, "{ping}");
     let waited = ping["last_flush_wait_ms"].as_u64().unwrap();
     assert!(waited <= 250, "events waited {waited} ms before the commit");
 

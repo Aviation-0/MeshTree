@@ -315,10 +315,10 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Sync) => {
-            let (outcome, revoked, _) = claims::sync(&current_dir()?)?;
-            println!("{}", claims::push_status(&outcome));
-            println!("leases: {}", outcome.replay.leases.len());
-            for r in &revoked {
+            let summary = claims::sync(&current_dir()?)?;
+            println!("{}", summary.coord);
+            println!("leases: {}", summary.leases);
+            for r in &summary.revoked {
                 eprintln!(
                     "meshtree: [{}] {} lost {} to {}; claim revoked",
                     meshtree_core::ERROR_CODE_CLAIM_CONFLICT,

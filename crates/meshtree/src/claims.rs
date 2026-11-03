@@ -21,7 +21,7 @@ use meshtree_core::{Config, Task, TaskId, TaskIdAllocator, TaskStatus, Timestamp
 use meshtree_platform::coord::{CoordError, CoordStore, SyncOutcome};
 use meshtree_platform::gitops::{CliGitOps, GitOps};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Remote that carries the coordination ref.
 pub const REMOTE: &str = "origin";
@@ -334,13 +334,50 @@ pub struct Revocation {
     pub holder: TaskId,
 }
 
+/// What `meshtree sync` reports.
+pub struct SyncSummary {
+    /// One-line coordination status ([`push_status`]).
+    pub coord: String,
+    /// Live leases after the sync.
+    pub leases: usize,
+    pub revoked: Vec<Revocation>,
+}
+
 /// `meshtree sync`: flush local events and pull remote ones; revoke local
-/// claims that replay now rejects.
-pub fn sync(cwd: &Path) -> Result<(SyncOutcome, Vec<Revocation>, PathBuf), CliError> {
+/// claims that replay now rejects. Through the daemon when one is running,
+/// so the claims it acknowledged but has not committed yet are included
+/// (`ADR-0009`); else in-process.
+pub fn sync(cwd: &Path) -> Result<SyncSummary, CliError> {
     let repo_root = require_repo_root(cwd)?;
+    if let Some(result) = daemon::call(&repo_root, "sync", serde_json::json!({})) {
+        let result = result?;
+        let bad = || CliError::new(DAEMON, format!("malformed daemon sync result: {result}"));
+        let id = |v: &serde_json::Value| v.as_str().and_then(TaskId::parse).ok_or_else(bad);
+        let revoked = result["revoked"]
+            .as_array()
+            .ok_or_else(bad)?
+            .iter()
+            .map(|r| {
+                Ok(Revocation {
+                    task: id(&r["task_id"])?,
+                    path: r["path"].as_str().ok_or_else(bad)?.to_string(),
+                    holder: id(&r["holder"])?,
+                })
+            })
+            .collect::<Result<_, CliError>>()?;
+        return Ok(SyncSummary {
+            coord: result["coord"].as_str().ok_or_else(bad)?.to_string(),
+            leases: result["leases"].as_u64().ok_or_else(bad)? as usize,
+            revoked,
+        });
+    }
     let config = load_config(&repo_root)?;
     let (outcome, revoked) = sync_in(&repo_root, &config)?;
-    Ok((outcome, revoked, repo_root))
+    Ok(SyncSummary {
+        coord: push_status(&outcome),
+        leases: outcome.replay.leases.len(),
+        revoked,
+    })
 }
 
 /// [`sync`] for an already-resolved repository (also run by the daemon).
