@@ -2,8 +2,9 @@
 //!
 //! Releases the task's claims, tears down its worktree (§10: backoff, then
 //! quarantine `MT-021`, then deferral `MT-020` — never a failure), then
-//! records `active → abandoned`. The task branch is kept so discarded work
-//! stays recoverable.
+//! records `active → abandoned`, locally and in the coordination-ref task
+//! registry (best-effort). The task branch is kept so discarded work stays
+//! recoverable.
 
 use crate::exit::{CliError, TASK, USAGE};
 use crate::repo::{load_config, require_repo_root};
@@ -11,8 +12,8 @@ use crate::{claims, registry};
 use meshtree_core::{Task, TaskError, TaskId, TaskStatus};
 use std::path::Path;
 
-/// Runs `meshtree abort`; returns the updated task and a teardown note
-/// when the worktree was quarantined or left locked.
+/// Runs `meshtree abort`; returns the updated task and a note when the
+/// worktree was quarantined or left locked, or the registry push deferred.
 pub fn run(cwd: &Path, task_id: &str) -> Result<(Task, Option<String>), CliError> {
     let repo_root = require_repo_root(cwd)?;
     let id = TaskId::parse(task_id)
@@ -53,5 +54,10 @@ pub fn run(cwd: &Path, task_id: &str) -> Result<(Task, Option<String>), CliError
     task.transition(TaskStatus::Abandoned)
         .map_err(|err| CliError::new(TASK, err.to_string()))?;
     registry::write_task(&repo_root, &task)?;
+    let published = claims::publish_task(&repo_root, &load_config(&repo_root)?, &task);
+    let note = match (note, published) {
+        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
+        (a, b) => a.or(b),
+    };
     Ok((task, note))
 }

@@ -10,6 +10,14 @@
 //! ×5 with jitter. The coordination ref is linear on the remote tip and never
 //! gets merge commits. Network failures never block local progress: the
 //! local ref still advances and the outcome reports the push as deferred.
+//!
+//! The ref also carries the cross-machine task registry, `tasks/<id>.json`
+//! (§5, §8 `spawn` step 4). A record is written only by the machine that
+//! owns the task and carries an integer `revision` (the owner's clock in
+//! nanoseconds). Each round keeps every record of both tips; when the tips
+//! disagree on a task, the higher revision wins (ties: the greater bytes, so
+//! every machine picks the same record), and records passed to
+//! [`CoordStore::sync_with`] replace both.
 
 use crate::gitops::{GitError, GitOps, TreeEntry, ERROR_CODE_CAS_REJECTED};
 use meshtree_core::lease::coord::{decode_log, encode, DecodeIssue};
@@ -29,6 +37,9 @@ pub const MAX_ATTEMPTS: u32 = 5;
 
 /// "Ref must not exist" for a local `update-ref` CAS.
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+
+/// Tree directory of the cross-machine task registry.
+pub const TASKS_DIR: &str = "tasks";
 
 /// Local ref holding the last fetched remote tip.
 pub fn tracking_ref(remote: &str) -> String {
@@ -134,6 +145,16 @@ impl<G: GitOps> CoordStore<G> {
 
     /// Appends `new_events` (may be empty: a pure fetch/flush) and syncs.
     pub fn sync(&self, new_events: &[LeaseEvent]) -> Result<SyncOutcome, CoordError> {
+        self.sync_with(new_events, &BTreeMap::new())
+    }
+
+    /// [`CoordStore::sync`] that also writes task registry records
+    /// (`task id → tasks/<id>.json` bytes, each with a `revision`).
+    pub fn sync_with(
+        &self,
+        new_events: &[LeaseEvent],
+        tasks: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<SyncOutcome, CoordError> {
         let mut attempt = 0;
         loop {
             attempt += 1;
@@ -171,7 +192,23 @@ impl<G: GitOps> CoordStore<G> {
             events.retain(|e| seen.insert(e.id.clone()));
 
             let derived = replay(&events, &self.config, conflicts_raw);
-            let tree = self.write_tree(&encode(&events, &derived))?;
+            let mut files = encode(&events, &derived);
+            let mut registry: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+            for oid in &tips {
+                for (id, bytes) in self.read_tasks(oid)? {
+                    match registry.get(&id) {
+                        Some(kept) if !newer(&bytes, kept) => {}
+                        _ => {
+                            registry.insert(id, bytes);
+                        }
+                    }
+                }
+            }
+            registry.extend(tasks.iter().map(|(id, b)| (id.clone(), b.clone())));
+            for (id, bytes) in registry {
+                files.insert(format!("{TASKS_DIR}/{id}.json"), bytes);
+            }
+            let tree = self.write_tree(&files)?;
 
             // Linear history on the remote tip (else the local tip); skip the
             // commit entirely when the tree is unchanged.
@@ -229,6 +266,24 @@ impl<G: GitOps> CoordStore<G> {
         }
     }
 
+    /// The task registry stored in commit `oid`: task id → record bytes.
+    pub fn read_tasks(&self, oid: &str) -> Result<BTreeMap<String, Vec<u8>>, GitError> {
+        let mut tasks = BTreeMap::new();
+        for entry in self.git.ls_tree(oid)? {
+            let id = entry
+                .path
+                .strip_prefix(TASKS_DIR)
+                .and_then(|p| p.strip_prefix('/'))
+                .and_then(|p| p.strip_suffix(".json"));
+            if let (Some(id), "blob") = (id, entry.kind.as_str()) {
+                if !id.contains('/') {
+                    tasks.insert(id.to_string(), self.git.cat_blob(&entry.oid)?);
+                }
+            }
+        }
+        Ok(tasks)
+    }
+
     /// Writes `dir/name → bytes` files (one directory level, as in the coord
     /// layout) as git trees; returns the root tree OID.
     fn write_tree(&self, files: &BTreeMap<String, Vec<u8>>) -> Result<String, GitError> {
@@ -250,8 +305,38 @@ impl<G: GitOps> CoordStore<G> {
     }
 }
 
+/// `true` if task record `a` supersedes `b`: higher `revision` (absent or
+/// malformed counts as 0), then the greater bytes, so the choice is the same
+/// on every machine.
+fn newer(a: &[u8], b: &[u8]) -> bool {
+    let revision = |bytes: &[u8]| {
+        serde_json::from_slice::<serde_json::Value>(bytes)
+            .ok()
+            .and_then(|v| v.get("revision").and_then(serde_json::Value::as_u64))
+            .unwrap_or(0)
+    };
+    (revision(a), a) > (revision(b), b)
+}
+
 /// Jittered linear backoff between CAS rounds: 10–60 ms × attempt.
 fn backoff(attempt: u32) {
     let jitter = RandomState::new().build_hasher().finish() % 50;
     std::thread::sleep(Duration::from_millis((10 + jitter) * u64::from(attempt)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_record_merge_prefers_higher_revision_then_bytes() {
+        let a = br#"{"revision":2,"status":"active"}"#;
+        let b = br#"{"revision":10,"status":"abandoned"}"#;
+        assert!(newer(b, a) && !newer(a, b), "numeric, not lexicographic");
+        let x = br#"{"revision":5,"status":"active"}"#;
+        let y = br#"{"revision":5,"status":"merged"}"#;
+        assert!(newer(y, x) && !newer(x, y), "ties break on bytes");
+        assert!(!newer(x, x));
+        assert!(newer(a, b"not json"), "malformed counts as revision 0");
+    }
 }

@@ -215,6 +215,9 @@ fn run(cli: Cli) -> Result<(), CliError> {
             for path in &report.task.claims {
                 println!("claim: {path}");
             }
+            if let Some(note) = &report.registry_note {
+                eprintln!("meshtree: {note}");
+            }
             Ok(())
         }
         Some(Command::Status { task_id, json }) => {

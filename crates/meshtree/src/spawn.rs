@@ -7,8 +7,10 @@
 //! `--claim` (claims are acquired before the worktree is created, so a
 //! conflicting spawn fails fast with `MT-001` and no worktree). Step 3 links
 //! every `[[share]]` directory from the primary worktree (§11); a failed link
-//! falls back to `none` (`MT-040`) and never fails the spawn. The
-//! coordination-ref task registry (`tasks/<id>.json`) is `T-043`.
+//! falls back to `none` (`MT-040`) and never fails the spawn. Step 4 also
+//! publishes the task to the coordination-ref registry (`tasks/<id>.json`,
+//! `T-043`) once it is `active` or `failed`; that is best-effort and never
+//! fails the spawn.
 
 use crate::exit::{CliError, PLATFORM, USAGE};
 use crate::repo::{load_config, machine_id, require_repo_root};
@@ -40,6 +42,8 @@ pub struct SpawnReport {
     pub worktree_path: PathBuf,
     /// One outcome per `[[share]]` entry (§11).
     pub shares: Vec<ShareOutcome>,
+    /// Why the coordination-ref registry was not updated remotely, if so.
+    pub registry_note: Option<String>,
 }
 
 /// Runs `meshtree spawn` from working directory `cwd`.
@@ -82,6 +86,7 @@ pub fn run(cwd: &Path, args: SpawnArgs) -> Result<SpawnReport, CliError> {
         if let Err(err) = claims::acquire(&repo_root, &config, &task.id, &claim_paths, None) {
             transition(&mut task, TaskStatus::Failed)?;
             registry::write_task(&repo_root, &task)?;
+            let _ = claims::publish_task(&repo_root, &config, &task);
             return Err(CliError::new(
                 err.code,
                 format!("{}: {}", task.id, err.message),
@@ -100,6 +105,7 @@ pub fn run(cwd: &Path, args: SpawnArgs) -> Result<SpawnReport, CliError> {
         }
         transition(&mut task, TaskStatus::Failed)?;
         registry::write_task(&repo_root, &task)?;
+        let _ = claims::publish_task(&repo_root, &config, &task);
         return Err(CliError::new(
             PLATFORM,
             format!("{}: worktree setup failed: {err}", task.id),
@@ -112,11 +118,13 @@ pub fn run(cwd: &Path, args: SpawnArgs) -> Result<SpawnReport, CliError> {
 
     transition(&mut task, TaskStatus::Active)?;
     registry::write_task(&repo_root, &task)?;
+    let registry_note = claims::publish_task(&repo_root, &config, &task);
 
     Ok(SpawnReport {
         task,
         worktree_path,
         shares,
+        registry_note,
     })
 }
 

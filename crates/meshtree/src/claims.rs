@@ -277,6 +277,38 @@ pub fn release_in(
     Ok((task, Report::new(paths, &outcome)))
 }
 
+/// Publishes `task` to the cross-machine registry (`tasks/<id>.json` in
+/// `refs/meshtree/coord`, §5, §8 `spawn` step 4) through the same CAS sync
+/// as claims. The record is the task as in `task.json` plus a `revision`
+/// (this machine's clock, ns) so the newest write wins across tips.
+pub fn register_task(
+    repo_root: &Path,
+    config: &Config,
+    task: &Task,
+) -> Result<SyncOutcome, CliError> {
+    let mut record = serde_json::to_value(task)
+        .map_err(|err| CliError::new(crate::exit::PLATFORM, err.to_string()))?;
+    record["revision"] = serde_json::json!(clock::now_unix_nanos());
+    let mut bytes = serde_json::to_vec_pretty(&record)
+        .map_err(|err| CliError::new(crate::exit::PLATFORM, err.to_string()))?;
+    bytes.push(b'\n');
+    let records = std::collections::BTreeMap::from([(task.id.to_string(), bytes)]);
+    store(repo_root, config)?
+        .sync_with(&[], &records)
+        .map_err(coord_error)
+}
+
+/// [`register_task`] as a best-effort step of a lifecycle command: never
+/// fails it, returns a note when the record was not published remotely.
+pub fn publish_task(repo_root: &Path, config: &Config, task: &Task) -> Option<String> {
+    match register_task(repo_root, config, task) {
+        Ok(outcome) => outcome
+            .deferred
+            .map(|why| format!("task registry push deferred ({why}); run `meshtree sync` later")),
+        Err(err) => Some(format!("task registry not updated: {}", err.message)),
+    }
+}
+
 /// Re-asserts `paths` held by `task` (`HEARTBEAT` events, §9).
 pub fn heartbeat(
     repo_root: &Path,
