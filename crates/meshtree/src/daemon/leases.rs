@@ -12,13 +12,23 @@
 //! every decision the local ref's tip is compared with the one the log was
 //! read at, by reading the ref file (no git process); the log is reloaded
 //! only when it moved.
+//!
+//! A full replay scans every live lease for every `ACQUIRE`, so its cost
+//! grows with the square of the log. The replay of the committed log is
+//! therefore cached (`base`) and new events are folded onto it with
+//! [`apply`], the same step [`replay`] performs per event. That is exact
+//! whenever the new events sort after every logged event, which holds for
+//! events this daemon creates now; otherwise the full replay is used.
 
 use crate::exit::{CliError, PLATFORM};
-use meshtree_core::lease::{replay, LeaseEvent, ReplayConfig};
+use meshtree_core::lease::{
+    replay, EventType, Lease, LeaseEvent, Replay, ReplayConfig, ERROR_CODE_CLAIM_CONFLICT,
+};
 use meshtree_core::pattern::conflicts_raw;
 use meshtree_core::Rejection;
 use meshtree_platform::coord::{CoordStore, COORD_REF};
 use meshtree_platform::gitops::{CliGitOps, GitOps};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,6 +40,10 @@ pub struct Leases {
     /// The log as of `tip`.
     log: Vec<LeaseEvent>,
     ids: HashSet<String>,
+    /// `replay(log)`.
+    base: Replay,
+    /// The log's last event in replay order.
+    last: Option<LeaseEvent>,
     /// Local coordination ref the log was read at (`None`: not read yet;
     /// `Some(None)`: the ref did not exist).
     tip: Option<Option<String>>,
@@ -46,6 +60,8 @@ impl Leases {
             config,
             log: Vec::new(),
             ids: HashSet::new(),
+            base: Replay::default(),
+            last: None,
             tip: None,
             pending: Vec::new(),
             since: None,
@@ -71,7 +87,28 @@ impl Leases {
         Ok(())
     }
 
+    /// Replaces the log. When the new log only adds events that sort after
+    /// the old one, the cached replay is extended instead of recomputed.
     fn set_log(&mut self, tip: Option<String>, log: Vec<LeaseEvent>) {
+        let mut added: Vec<&LeaseEvent> =
+            log.iter().filter(|e| !self.ids.contains(&e.id)).collect();
+        added.sort_by(|a, b| a.total_cmp(b));
+        let extends = log.len() == self.ids.len() + added.len()
+            && match (&self.last, added.first()) {
+                (Some(last), Some(first)) => first.total_cmp(last) == Ordering::Greater,
+                _ => true,
+            };
+        if extends {
+            for ev in &added {
+                apply(&mut self.base, ev, &self.config);
+            }
+            if let Some(newest) = added.last() {
+                self.last = Some((*newest).clone());
+            }
+        } else {
+            self.base = replay(&log, &self.config, conflicts_raw);
+            self.last = log.iter().max_by(|a, b| a.total_cmp(b)).cloned();
+        }
         self.ids = log.iter().map(|e| e.id.clone()).collect();
         self.log = log;
         self.tip = Some(tip);
@@ -85,11 +122,33 @@ impl Leases {
     /// The rejections `candidates` would get if added now (empty: all
     /// granted). Same replay and conflict rule as the coordination store.
     pub fn decide(&self, candidates: &[LeaseEvent]) -> Vec<Rejection> {
-        let mut all = self.log.clone();
-        all.extend(self.pending.iter().cloned());
-        all.extend(candidates.iter().cloned());
         let ids: HashSet<&str> = candidates.iter().map(|e| e.id.as_str()).collect();
-        replay(&all, &self.config, conflicts_raw)
+        let mut new: Vec<&LeaseEvent> = self
+            .pending
+            .iter()
+            .chain(candidates)
+            .filter(|e| !self.ids.contains(&e.id))
+            .collect();
+        new.sort_by(|a, b| a.total_cmp(b));
+        let mut seen = HashSet::new();
+        new.retain(|e| seen.insert(e.id.as_str()));
+        let incremental = match (&self.last, new.first()) {
+            (Some(last), Some(first)) => first.total_cmp(last) == Ordering::Greater,
+            _ => true,
+        };
+        let state = if incremental {
+            let mut state = self.base.clone();
+            for ev in new {
+                apply(&mut state, ev, &self.config);
+            }
+            state
+        } else {
+            let mut all = self.log.clone();
+            all.extend(self.pending.iter().cloned());
+            all.extend(candidates.iter().cloned());
+            replay(&all, &self.config, conflicts_raw)
+        };
+        state
             .rejected
             .into_iter()
             .filter(|r| ids.contains(r.event.as_str()))
@@ -134,6 +193,88 @@ impl Leases {
     }
 }
 
+/// One step of [`replay`]: applies `ev` to `state`. Must stay identical to
+/// the loop body of `meshtree_core::lease::replay` (checked by
+/// `fold_matches_core_replay`).
+fn apply(state: &mut Replay, ev: &LeaseEvent, config: &ReplayConfig) {
+    let grace = config.skew_grace_secs;
+    match ev.kind {
+        EventType::Acquire => {
+            let mut expired = Vec::new();
+            let mut holder: Option<&Lease> = None;
+            for lease in state.leases.values() {
+                if lease.task == ev.task
+                    || !(lease.path == ev.path || conflicts_raw(&lease.path, &ev.path))
+                {
+                    continue;
+                }
+                if lease.is_expired_at(ev.ts, grace) {
+                    expired.push(lease.path.clone());
+                } else if holder.is_none() {
+                    holder = Some(lease);
+                }
+            }
+            if let Some(lease) = holder {
+                let rejection = Rejection {
+                    code: ERROR_CODE_CLAIM_CONFLICT.to_string(),
+                    event: ev.id.clone(),
+                    path: ev.path.clone(),
+                    task: ev.task.clone(),
+                    machine: ev.machine.clone(),
+                    holder: lease.task.clone(),
+                    holder_path: lease.path.clone(),
+                };
+                state.rejected.push(rejection);
+                return;
+            }
+            for path in expired {
+                state.leases.remove(&path);
+            }
+            let ttl_secs = ev.ttl_secs.unwrap_or(config.default_ttl_secs);
+            let acquired_at = match state.leases.get(&ev.path) {
+                Some(own) if !own.is_expired_at(ev.ts, grace) => own.acquired_at,
+                _ => ev.ts,
+            };
+            state.leases.insert(
+                ev.path.clone(),
+                Lease {
+                    path: ev.path.clone(),
+                    task: ev.task.clone(),
+                    machine: ev.machine.clone(),
+                    acquired_at,
+                    ttl_secs,
+                    last_heartbeat: ev.ts,
+                },
+            );
+        }
+        EventType::Release => {
+            if state
+                .leases
+                .get(&ev.path)
+                .is_some_and(|l| l.task == ev.task)
+            {
+                state.leases.remove(&ev.path);
+            }
+        }
+        EventType::Heartbeat => {
+            if let Some(lease) = state.leases.get_mut(&ev.path) {
+                if lease.task == ev.task && !lease.is_expired_at(ev.ts, grace) {
+                    lease.last_heartbeat = lease.last_heartbeat.max(ev.ts);
+                }
+            }
+        }
+        EventType::ExpireSweep => {
+            if state
+                .leases
+                .get(&ev.path)
+                .is_some_and(|l| l.task == ev.task && l.is_expired_at(ev.ts, grace))
+            {
+                state.leases.remove(&ev.path);
+            }
+        }
+    }
+}
+
 /// The local coordination ref's tip, read from the ref files when the
 /// repository has a plain `.git` directory (loose ref, then `packed-refs`),
 /// else through git.
@@ -173,8 +314,12 @@ fn is_oid(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meshtree_core::lease::EventType;
     use meshtree_core::{TaskId, Timestamp};
+
+    const CONFIG: ReplayConfig = ReplayConfig {
+        default_ttl_secs: 900,
+        skew_grace_secs: 600,
+    };
 
     fn ev(id: &str, kind: EventType, path: &str, task: u128, ms: u64) -> LeaseEvent {
         LeaseEvent {
@@ -190,13 +335,7 @@ mod tests {
     }
 
     fn leases() -> Leases {
-        Leases::new(
-            Path::new("."),
-            ReplayConfig {
-                default_ttl_secs: 900,
-                skew_grace_secs: 600,
-            },
-        )
+        Leases::new(Path::new("."), CONFIG)
     }
 
     #[test]
@@ -230,6 +369,103 @@ mod tests {
         ]);
         assert_eq!(n, 1);
         assert_eq!(l.pending()[0].id, "01E");
+    }
+
+    /// Deterministic pseudo-random event stream over overlapping paths,
+    /// three tasks, all four kinds, and time gaps that cross expiry.
+    fn stream(seed: u64, n: usize) -> Vec<LeaseEvent> {
+        const PATHS: [&str; 6] = [
+            "src/**",
+            "src/a.rs",
+            "src/b/**",
+            "docs/**",
+            "docs/x.md",
+            "*",
+        ];
+        const KINDS: [EventType; 4] = [
+            EventType::Acquire,
+            EventType::Release,
+            EventType::Heartbeat,
+            EventType::ExpireSweep,
+        ];
+        let mut x = seed.max(1);
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut ms = 1_000_000;
+        (0..n)
+            .map(|i| {
+                ms += [1, 1_000, 300_000, 1_600_000][(next() % 4) as usize];
+                let kind = KINDS[(next() % 4) as usize];
+                let mut e = ev(
+                    &format!("{i:08}"),
+                    kind,
+                    PATHS[(next() % PATHS.len() as u64) as usize],
+                    1 + u128::from(next() % 3),
+                    ms,
+                );
+                e.ttl_secs = (kind == EventType::Acquire).then_some(600 + next() % 1200);
+                e
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fold_matches_core_replay() {
+        for seed in 1..200 {
+            let events = stream(seed, 60);
+            let full = replay(&events, &CONFIG, conflicts_raw);
+            for split in [0, 1, 17, 30, 59, 60] {
+                let mut state = replay(&events[..split], &CONFIG, conflicts_raw);
+                for e in &events[split..] {
+                    apply(&mut state, e, &CONFIG);
+                }
+                assert_eq!(state, full, "seed {seed}, split {split}");
+            }
+            // Through the cache: extending the log, then deciding.
+            let mut l = leases();
+            l.set_log(Some("a".repeat(40)), events[..20].to_vec());
+            l.set_log(Some("b".repeat(40)), events[..40].to_vec());
+            let candidates = &events[40..];
+            let expected: Vec<Rejection> = full
+                .rejected
+                .iter()
+                .filter(|r| candidates.iter().any(|c| c.id == r.event))
+                .cloned()
+                .collect();
+            assert_eq!(l.decide(candidates), expected, "seed {seed}");
+            assert_eq!(l.base, replay(&events[..40], &CONFIG, conflicts_raw));
+        }
+    }
+
+    #[test]
+    fn out_of_order_events_fall_back_to_full_replay() {
+        let mut l = leases();
+        l.set_log(
+            Some("a".repeat(40)),
+            vec![ev("02", EventType::Acquire, "src/**", 1, 5_000)],
+        );
+        // An event older than the log (a skewed remote clock) is decided by
+        // the full replay: it sorts first, so it wins and the logged acquire
+        // is the one rejected. Folding it onto the cache would reject it.
+        let early = ev("01", EventType::Acquire, "src/a.rs", 2, 1_000);
+        let full = replay(
+            &[
+                ev("02", EventType::Acquire, "src/**", 1, 5_000),
+                early.clone(),
+            ],
+            &CONFIG,
+            conflicts_raw,
+        );
+        assert_eq!(full.rejected.len(), 1);
+        assert_eq!(full.rejected[0].event, "02");
+        assert!(l.decide(std::slice::from_ref(&early)).is_empty());
+        // A log that is not an extension is replayed from scratch.
+        l.set_log(Some("b".repeat(40)), vec![early.clone()]);
+        assert_eq!(l.base, replay(&[early], &CONFIG, conflicts_raw));
     }
 
     #[test]
