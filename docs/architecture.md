@@ -193,7 +193,7 @@ The integration branch therefore only ever holds validated merges. `meshtree pro
 Expensive shared operations, such as tests, builds and `validate`, run through per-queue FIFO queues held in daemon memory (§12).
 
 - **Tickets.** A request issues a `q-<ULID>` ticket bound to the requesting process's `pid` and `boot_id` ([format](protocol.md#queue-ticket)). Up to `concurrency` tickets are granted at once, in FIFO order.
-- **Eviction.** On every queue operation the daemon evicts holders whose process is gone (by pid and boot id), and granted tickets whose slot has been held longer than the ticket TTL. The TTL is currently `[lease] ttl_secs`; `[queue.<name>] ticket_ttl_secs` arrives with `T-052` (`ADR-0011`).
+- **Eviction.** On every queue operation the daemon evicts holders whose process is gone (by pid and boot id), and granted tickets whose slot has been held longer than the ticket TTL. The TTL is `[queue.<name>] ticket_ttl_secs`, or `[lease] ttl_secs` when the key is absent and for internal queues such as `validate` (`ADR-0011`).
 - **Commands come from committed config only** (§17, `ADR-0005`). The client may append only arguments listed verbatim in the queue's `allow_args`. Anything else, including shell metacharacters smuggled into an argument, is refused before a ticket exists. `allow_args` entries containing whitespace are themselves invalid config (`MT-050`).
 - The `meshtree queue <name> request` CLI waits for its grant, runs the command in the task worktree, and always releases the ticket. If the CLI is killed, the dead-process check frees the slot.
 
@@ -239,7 +239,7 @@ A failed or unsupported strategy never fails `spawn`: anything partially created
 ## 9. Handoffs and `AGENTS.md`
 
 - **`commit_handoff`** validates a [handoff record](protocol.md#handoff-record) and renders it to `HANDOFF.md`. It commits both files to the task branch with plumbing (`mktree`, `commit-tree`, then a fast-forward of the worktree), so the agent's index and working files are untouched.
-- **`render_agents_block`** regenerates the `## Active Sessions` block in `AGENTS.md` from the live tasks (`active`, `collecting`, `merging`) and the handoffs committed on their branches, in task-id order, capped at 10 lines (`[agents] max_lines` with `T-052`). Only the text between the generated markers is replaced, and the file is rewritten only when its bytes change. Handoff text is flattened so it cannot forge or break the markers.
+- **`render_agents_block`** regenerates the `## Active Sessions` block in `AGENTS.md` from the live tasks (`active`, `collecting`, `merging`) and the handoffs committed on their branches, in task-id order, capped at `[agents] max_lines` lines (default 10, `ADR-0011`). Only the text between the generated markers is replaced, and the file is rewritten only when its bytes change. Handoff text is flattened so it cannot forge or break the markers.
 
 ## 10. Compaction in the writer (`ADR-0010`)
 
