@@ -4,6 +4,7 @@ members = [
     "crates/meshtree-core",
     "crates/meshtree-platform",
     "crates/meshtree",
+    "xtask",
 ]
 
 [workspace.package]
