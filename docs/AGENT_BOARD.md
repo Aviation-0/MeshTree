@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-040 (shared-op queue ticket TTL expiry)
-- Status: doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-02 | Claude Opus 5.5 (Windows): T-040 done (33/46). Queue slot lapses lease.ttl_secs after grant even with a live holder; next FIFO ticket granted at that instant. No §6 queue TTL key (ADR if wanted).
+    CI green (run 41550700924). Next: T-043.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-039 done (32/46). collect pushes integration to origin with lease; lost race => refetch, replay-merge, retry (<=5) then MT-031; network failure defers push. Two-clone race test.
     CI green (run 41549927497). Next: T-040.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-032 done (31/46). share_junction_realpath_probe_matrix + docs/compatibility.md (npm/pnpm/Cargo/.venv/Vite/webpack/Next recipes). Windows junction ".." is lexical (task wt), POSIX physical (primary).
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
     CI green (run 41540486618). Open: §6 cap key; machine-id. Next: T-039.
 - 2026-11-02 | Claude Opus 5.5 (Mac): T-027 done (29/46). meshtree handoff (--json-file/--set) commits handoff.json+HANDOFF.md on task branch via plumbing + worktree ff-only (agent WIP kept); render-agents rewrites AGENTS.md block on change.
   CI green (run 41509759232). Open: §6 cap key; OS machine-id unowned. Next: T-028.
-- 2026-10-31 | Claude Opus 5.5 (Windows): T-026 done (28/46). core::handoff: HandoffRecord, HANDOFF.md + AGENTS.md block renderers (id order, 10-line cap, marker forgery defused), idempotent CRLF-preserving splice.
-  CI green (run 41231429375). Open: no §6 key for the 10-line cap. Next: T-027.
