@@ -467,8 +467,13 @@ struct Inner {
 
 impl Inner {
     fn journal(&mut self, op: WalOp) -> Result<(), CliError> {
+        self.journal_all(vec![op])
+    }
+
+    /// Several entries with one `fsync` (a claim's events and its claim).
+    fn journal_all(&mut self, ops: Vec<WalOp>) -> Result<(), CliError> {
         self.wal
-            .append(clock::now_unix_ms(), op)
+            .append_all(clock::now_unix_ms(), ops)
             .map(drop)
             .map_err(|err| CliError::new(PLATFORM, format!("WAL append: {err}")))
     }
@@ -944,11 +949,7 @@ impl Daemon {
             }
             // Journaled before the answer: an acknowledged claim survives a crash.
             inner.ensure_journaled(&task)?;
-            inner.journal(WalOp::Events {
-                task: task.id.clone(),
-                events: batch.clone(),
-            })?;
-            inner.journal(if claim {
+            let change = if claim {
                 WalOp::Claim {
                     task: task.id.clone(),
                     paths: paths.clone(),
@@ -958,7 +959,14 @@ impl Daemon {
                     task: task.id.clone(),
                     paths: paths.clone(),
                 }
-            })?;
+            };
+            inner.journal_all(vec![
+                WalOp::Events {
+                    task: task.id.clone(),
+                    events: batch.clone(),
+                },
+                change,
+            ])?;
             leases.accept(batch);
         }
         if claim {

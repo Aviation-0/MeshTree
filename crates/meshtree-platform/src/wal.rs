@@ -290,27 +290,39 @@ impl Wal {
 
     /// Journals `op` at `at_ms`, durably (`fsync`) before returning.
     pub fn append(&mut self, at_ms: u64, op: WalOp) -> io::Result<WalEntry> {
+        let mut entries = self.append_all(at_ms, vec![op])?;
+        Ok(entries.pop().expect("one entry per op"))
+    }
+
+    /// Journals `ops` in order at `at_ms` with one write and one `fsync`.
+    /// A crash leaves a prefix of them (a torn last frame is truncated on
+    /// open), the same as appending them one by one.
+    pub fn append_all(&mut self, at_ms: u64, ops: Vec<WalOp>) -> io::Result<Vec<WalEntry>> {
         if self.poisoned {
             return Err(io::Error::other(
                 "WAL append refused after an earlier failed write; reopen the WAL",
             ));
         }
-        let entry = WalEntry {
-            seq: self.next_seq,
-            at_ms,
-            op,
-        };
-        let frame = encode_frame(&entry);
+        let entries: Vec<WalEntry> = ops
+            .into_iter()
+            .enumerate()
+            .map(|(i, op)| WalEntry {
+                seq: self.next_seq + i as u64,
+                at_ms,
+                op,
+            })
+            .collect();
+        let frames: Vec<u8> = entries.iter().flat_map(encode_frame).collect();
         if let Err(e) = self
             .file
-            .write_all(&frame)
+            .write_all(&frames)
             .and_then(|()| self.file.sync_data())
         {
             self.poisoned = true;
             return Err(e);
         }
-        self.next_seq += 1;
-        Ok(entry)
+        self.next_seq += entries.len() as u64;
+        Ok(entries)
     }
 
     /// Sequence number the next append will use.
