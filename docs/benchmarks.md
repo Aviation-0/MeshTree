@@ -31,10 +31,10 @@ Bold cells miss the §18 target.
 
 ## Findings
 
-- **Local claim misses `p95 < 50 ms` on every OS.**
-  - Each `claim_paths` writes a coordination-ref commit synchronously. One claim runs about a dozen `git` subprocesses (`hash-object`, `mktree`, `commit-tree`, `update-ref`, …) before the daemon answers.
-  - That cost shows up as about 100 ms on Linux, and as much more on macOS and Windows, where process creation is expensive.
-  - Meeting the target needs a change in the claim path, such as answering from the daemon's in-memory lease table and writing the ref asynchronously, or doing the git writes in-process. That is a design change to raise with the project owner, not a benchmark fix.
+- **Local claim misses `p95 < 50 ms` on every OS, and the cost grows with history.**
+  - Each `claim_paths` runs a synchronous coordination-ref sync round. That round re-reads every `log/*.json` blob with one `git cat-file` process each and re-hashes every file of the tree with one `git hash-object` each: about 2N + L + 8 subprocesses for N logged events and L leases.
+  - The log is append-only, so claims slow down as a repository is used. Process creation is expensive on macOS and Windows, which is why those numbers are so much higher.
+  - `ADR-0009` (Proposed) addresses it in two parts: (1) make sync rounds independent of history (event cache, batched reads and writes, tree reuse); (2) have the daemon answer from its in-memory lease table after a WAL append and commit/push in the background within 250 ms.
 - **The cross-machine CAS round meets the target here, but only against a local `file://` remote.** Most of each round is the same subprocess cost as above. A real GitHub remote adds network RTT on top, so the full-scale run with `--remote` decides this row.
 - **The silent-overwrite baseline depends on scale.** In the baseline, two agents read, modify and write one shared checkout. With only 12 edits per smoke session, lost updates showed up on one runner (4 of 12) and not on the others. The §18 "baseline N > 0" needs the full session (20 rounds × 5 edits × 2 agents). MeshTree recorded 0 silent overwrites on every OS: every refused claim or merge was reported to the agent.
 - **`index.lock`.** Unqueued concurrent `git add -A` in one worktree collided in 38–67 % of writes. Through a concurrency-1 queue, none collided.
