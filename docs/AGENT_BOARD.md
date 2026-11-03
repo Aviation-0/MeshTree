@@ -11,6 +11,9 @@ Anti-Bloat Constraints:
 - Model: Claude Opus 5.5 (Windows)
 - Task: T-049 (daemon in-memory claims, WAL events, background commit (ADR-0009 Part 2))
 - Status: doing
+- Model: Claude Opus 5.5 (Mac)
+- Task: T-031 (§17 security suite & core coverage gate)
+- Status: doing (2026-11-03)
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
