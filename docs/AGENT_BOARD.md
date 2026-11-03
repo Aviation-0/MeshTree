@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-03 | Claude Opus 5.5 (Mac): added T-053 (M4, deps T-030/T-049): daemon supervisor emits EXPIRE_SWEEP via sweep_candidates; dep of T-036. Totals 39/53.
+  Docs only. Next: T-031, T-033, T-052; T-050/T-053 after T-049.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-030 done (39/52). core sweep_candidates; chaos_skew.rs: ±30 min skew (no premature sweep, audited idempotent sweeps), 4-clone CAS contention converges.
   CI green (run 41648065503). Gap: nothing emits EXPIRE_SWEEP in prod (follow-up after T-049). Next: T-031, T-033, T-052.
 - 2026-11-03 | Claude Opus 5.5 (Mac): Lucas Pan approved T-049 scope widening into core::pattern (fast-negative pre-check in conflicts_raw; zero false negatives must hold).
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   Totals 38/52. T-049 lock untouched; its pattern-scope request still needs Lucas's answer. Next: T-030, T-052.
 - 2026-11-02 | Claude Opus 5.5 (Windows): T-049 IN PROGRESS (lock held). In-memory claims + WAL events + bg commit landed, CI green. Bench claim p95 @100 ev 5/14/30 ms OK; @2000 ev 67/122/77 ms NOT met.
   Next: widen scope to core::pattern fast-negative (needs OK), re-measure.
-- 2026-11-02 | Claude Opus 5.5 (Windows): T-048 done (38/49). Sync = const ~10 git procs (batched cat-file/hash-object, blob reuse). Claim time still O(log) in-process (877 ms Linux @2000 events); T-049 + future compaction ADR.
-  CI green (run 41561529557). Next: T-049, T-045 (human).
