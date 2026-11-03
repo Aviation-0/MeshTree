@@ -3,6 +3,9 @@ name = "meshtree"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Coordinate parallel AI coding agents across git worktrees and machines"
+repository = "https://github.com/Aviation-0/MeshTree"
+homepage = "https://github.com/Aviation-0/MeshTree"
 
 [[bin]]
 name = "meshtree"

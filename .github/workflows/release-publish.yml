@@ -1,0 +1,123 @@
+# Publish jobs called by release.yml after the GitHub Release exists (SPEC §19,
+# T-035). Each channel runs only when its secret is configured, so a release
+# without secrets still succeeds and simply skips that channel:
+#
+#   HOMEBREW_TAP_TOKEN  push Formula/meshtree.rb to Aviation-0/homebrew-tap
+#   NPM_TOKEN           publish packages/meshtree-mcp (the npx shim)
+#   SCOOP_BUCKET_TOKEN  push meshtree.json to Aviation-0/scoop-bucket
+#   WINGET_TOKEN        open a winget-pkgs update PR for Aviation-0.MeshTree
+name: Release publish
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+env:
+  TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+  VERSION: ${{ fromJson(inputs.plan).releases[0].app_version }}
+
+jobs:
+  homebrew:
+    name: Homebrew tap
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Skip without HOMEBREW_TAP_TOKEN
+        id: gate
+        run: echo "enabled=${{ env.TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Aviation-0/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - if: steps.gate.outputs.enabled == 'true'
+        name: Commit the formula from the release
+        run: |
+          mkdir -p Formula
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern meshtree.rb --dir Formula --clobber
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/meshtree.rb
+          git diff --cached --quiet || git commit -m "meshtree $VERSION"
+          git push
+
+  npm:
+    name: npm (meshtree-mcp)
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Skip without NPM_TOKEN
+        id: gate
+        run: echo "enabled=${{ env.NODE_AUTH_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - if: steps.gate.outputs.enabled == 'true'
+        name: Publish the npx shim at the release version
+        working-directory: packages/meshtree-mcp
+        run: |
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm publish --access public
+
+  scoop:
+    name: Scoop bucket
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Skip without SCOOP_BUCKET_TOKEN
+        id: gate
+        run: echo "enabled=${{ env.TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          path: meshtree
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Aviation-0/scoop-bucket
+          token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          path: bucket
+      - if: steps.gate.outputs.enabled == 'true'
+        name: Render and commit the manifest
+        run: |
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern 'meshtree-x86_64-pc-windows-msvc.zip.sha256' --dir .
+          SHA=$(cut -d' ' -f1 meshtree-x86_64-pc-windows-msvc.zip.sha256)
+          node meshtree/dist/render-manifests.mjs "$VERSION" "$SHA" rendered
+          mkdir -p bucket/bucket
+          cp rendered/scoop/meshtree.json bucket/bucket/meshtree.json
+          cd bucket
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bucket/meshtree.json
+          git diff --cached --quiet || git commit -m "meshtree $VERSION"
+          git push
+
+  winget:
+    name: winget
+    runs-on: windows-latest
+    env:
+      TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - name: Skip without WINGET_TOKEN
+        id: gate
+        shell: bash
+        run: echo "enabled=${{ env.TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.enabled == 'true'
+        name: Submit the update with wingetcreate
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          $url = "https://github.com/${{ github.repository }}/releases/download/$env:TAG/meshtree-x86_64-pc-windows-msvc.zip"
+          .\wingetcreate.exe update Aviation-0.MeshTree --version $env:VERSION --urls $url --token $env:TOKEN --submit

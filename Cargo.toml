@@ -20,3 +20,30 @@ proptest = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+
+# Release builds (dist): release settings plus thin LTO for smaller binaries.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+# Release automation (SPEC §19, T-035). After editing, regenerate
+# .github/workflows/release.yml with `dist/regenerate-release-workflow.sh` (it
+# works around dist 0.34.0 writing local workflows as `$/...`; `allow-dirty =
+# ["ci"]` keeps dist from treating that fix as drift). The test
+# `release_workflow_is_wired` checks the result.
+[workspace.metadata.dist]
+cargo-dist-version = "0.34.0"
+ci = "github"
+allow-dirty = ["ci"]
+# The three SPEC §19 targets.
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# shell/PowerShell installers and the Homebrew formula are release assets; the
+# formula is pushed to Aviation-0/homebrew-tap by release-publish.yml.
+installers = ["shell", "powershell", "homebrew"]
+tap = "Aviation-0/homebrew-tap"
+formula = "meshtree"
+# cargo-audit must pass before anything is built.
+plan-jobs = ["./release-audit"]
+# Homebrew tap, npm shim, Scoop and winget; each is skipped without its secret.
+publish-jobs = ["./release-publish"]
+install-updater = false

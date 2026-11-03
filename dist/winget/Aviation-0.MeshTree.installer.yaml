@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: Aviation-0.MeshTree
+PackageVersion: {{VERSION}}
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: meshtree.exe
+    PortableCommandAlias: meshtree
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/Aviation-0/MeshTree/releases/download/v{{VERSION}}/meshtree-x86_64-pc-windows-msvc.zip
+    InstallerSha256: {{SHA256_UPPER}}
+ManifestType: installer
+ManifestVersion: 1.6.0

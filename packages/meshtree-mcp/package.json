@@ -1,0 +1,22 @@
+{
+  "name": "meshtree-mcp",
+  "version": "0.1.0",
+  "description": "npx launcher for the MeshTree MCP server (`meshtree mcp`, stdio)",
+  "homepage": "https://github.com/Aviation-0/MeshTree",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aviation-0/MeshTree.git",
+    "directory": "packages/meshtree-mcp"
+  },
+  "bin": {
+    "meshtree-mcp": "bin/meshtree-mcp.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

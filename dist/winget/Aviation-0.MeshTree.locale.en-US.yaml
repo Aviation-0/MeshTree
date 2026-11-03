@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: Aviation-0.MeshTree
+PackageVersion: {{VERSION}}
+PackageLocale: en-US
+Publisher: Aviation-0
+PackageName: MeshTree
+PackageUrl: https://github.com/Aviation-0/MeshTree
+License: Unknown
+ShortDescription: Coordinate parallel AI coding agents across git worktrees and machines
+Moniker: meshtree
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
