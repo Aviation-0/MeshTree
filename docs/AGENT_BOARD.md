@@ -8,9 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-039 (integration-branch remote sync, non-ff retry x5)
-- Status: doing
+- Model: None (Idle)
+- Task: None
+- Status: Idle
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-02 | Claude Opus 5.5 (Windows): T-039 done (32/46). collect pushes integration to origin with lease; lost race => refetch, replay-merge, retry (<=5) then MT-031; network failure defers push. Two-clone race test.
+    CI green (run 41549927497). Next: T-040.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-032 done (31/46). share_junction_realpath_probe_matrix + docs/compatibility.md (npm/pnpm/Cargo/.venv/Vite/webpack/Next recipes). Windows junction ".." is lexical (task wt), POSIX physical (primary).
     CI green (run 41548903359). Next: T-039.
 - - 2026-11-02 | Claude Opus 5.5 (Windows): T-028 done (30/46). meshtree mcp: stateless stdio JSON-RPC proxy, 11 §15 tools, [MT-xxx] isError results (MT-010 no daemon), EOF exit leaves daemon. Daemon +spawn/abort/list/commit_handoff/render methods; claim ttl_secs.
@@ -32,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41509759232). Open: §6 cap key; OS machine-id unowned. Next: T-028.
 - 2026-10-31 | Claude Opus 5.5 (Windows): T-026 done (28/46). core::handoff: HandoffRecord, HANDOFF.md + AGENTS.md block renderers (id order, 10-line cap, marker forgery defused), idempotent CRLF-preserving splice.
   CI green (run 41231429375). Open: no §6 key for the 10-line cap. Next: T-027.
-- 2026-10-31 | Claude Opus 5.5 (Windows): T-046 done (27/46). Unix socket falls back to /tmp/meshtree-<uid>/<hash16>.sock past the path limit; dir must be our own real 0700 dir (bind+connect).
-  CI green (run 41230869170). Next: T-026.
