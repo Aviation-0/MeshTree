@@ -11,6 +11,12 @@
 //! gets merge commits. Network failures never block local progress: the
 //! local ref still advances and the outcome reports the push as deferred.
 //!
+//! A round's git subprocess count does not depend on the log's length
+//! (`ADR-0009` Part 1): each tip is read with one `ls-tree` and one batched
+//! `cat-file`, blobs whose bytes a tip already holds keep their OIDs, and only
+//! new or changed files are written, in one batch. The resulting tree is
+//! byte-identical to writing every file afresh.
+//!
 //! The ref also carries the cross-machine task registry, `tasks/<id>.json`
 //! (§5, §8 `spawn` step 4). A record is written only by the machine that
 //! owns the task and carries an integer `revision` (the owner's clock in
@@ -24,7 +30,7 @@ use meshtree_core::lease::coord::{decode_log, encode, DecodeIssue};
 use meshtree_core::lease::{replay, LeaseEvent, Replay, ReplayConfig};
 use meshtree_core::pattern::conflicts_raw;
 use std::collections::hash_map::RandomState;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::hash::{BuildHasher, Hasher};
 use std::time::Duration;
@@ -129,18 +135,29 @@ impl<G: GitOps> CoordStore<G> {
         &self.git
     }
 
+    /// Every blob of commit `oid`: one `ls-tree` and one batched read,
+    /// however long the log is (`ADR-0009` Part 1).
+    fn snapshot(&self, oid: &str) -> Result<Snapshot, GitError> {
+        let entries: Vec<TreeEntry> = self
+            .git
+            .ls_tree(oid)?
+            .into_iter()
+            .filter(|e| e.kind == "blob")
+            .collect();
+        let oids: Vec<String> = entries.iter().map(|e| e.oid.clone()).collect();
+        let blobs = self.git.cat_blobs(&oids)?;
+        Ok(Snapshot {
+            files: entries
+                .into_iter()
+                .zip(blobs)
+                .map(|(e, bytes)| (e.path, e.oid, bytes))
+                .collect(),
+        })
+    }
+
     /// Decodes the event log stored in commit `oid`.
     pub fn read_log(&self, oid: &str) -> Result<(Vec<LeaseEvent>, Vec<DecodeIssue>), GitError> {
-        let mut files = Vec::new();
-        for entry in self.git.ls_tree(oid)? {
-            if entry.kind == "blob" && entry.path.starts_with("log/") {
-                let bytes = self.git.cat_blob(&entry.oid)?;
-                files.push((entry.path, bytes));
-            }
-        }
-        Ok(decode_log(
-            files.iter().map(|(p, b)| (p.as_str(), b.as_slice())),
-        ))
+        Ok(self.snapshot(oid)?.log())
     }
 
     /// Appends `new_events` (may be empty: a pure fetch/flush) and syncs.
@@ -181,8 +198,12 @@ impl<G: GitOps> CoordStore<G> {
                     tips.push(oid);
                 }
             }
-            for oid in &tips {
-                let (log, bad) = self.read_log(oid)?;
+            let snapshots = tips
+                .iter()
+                .map(|oid| self.snapshot(oid))
+                .collect::<Result<Vec<_>, _>>()?;
+            for snapshot in &snapshots {
+                let (log, bad) = snapshot.log();
                 events.extend(log);
                 issues.extend(bad);
             }
@@ -194,8 +215,8 @@ impl<G: GitOps> CoordStore<G> {
             let derived = replay(&events, &self.config, conflicts_raw);
             let mut files = encode(&events, &derived);
             let mut registry: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-            for oid in &tips {
-                for (id, bytes) in self.read_tasks(oid)? {
+            for snapshot in &snapshots {
+                for (id, bytes) in snapshot.tasks() {
                     match registry.get(&id) {
                         Some(kept) if !newer(&bytes, kept) => {}
                         _ => {
@@ -208,7 +229,14 @@ impl<G: GitOps> CoordStore<G> {
             for (id, bytes) in registry {
                 files.insert(format!("{TASKS_DIR}/{id}.json"), bytes);
             }
-            let tree = self.write_tree(&files)?;
+            // Blobs already in a tip are reused by content: only new or
+            // changed files are written.
+            let known: HashMap<&[u8], &str> = snapshots
+                .iter()
+                .flat_map(|s| s.files.iter())
+                .map(|(_, oid, bytes)| (bytes.as_slice(), oid.as_str()))
+                .collect();
+            let tree = self.write_tree(&files, &known)?;
 
             // Linear history on the remote tip (else the local tip); skip the
             // commit entirely when the tree is unchanged.
@@ -268,31 +296,38 @@ impl<G: GitOps> CoordStore<G> {
 
     /// The task registry stored in commit `oid`: task id → record bytes.
     pub fn read_tasks(&self, oid: &str) -> Result<BTreeMap<String, Vec<u8>>, GitError> {
-        let mut tasks = BTreeMap::new();
-        for entry in self.git.ls_tree(oid)? {
-            let id = entry
-                .path
-                .strip_prefix(TASKS_DIR)
-                .and_then(|p| p.strip_prefix('/'))
-                .and_then(|p| p.strip_suffix(".json"));
-            if let (Some(id), "blob") = (id, entry.kind.as_str()) {
-                if !id.contains('/') {
-                    tasks.insert(id.to_string(), self.git.cat_blob(&entry.oid)?);
-                }
-            }
-        }
-        Ok(tasks)
+        Ok(self.snapshot(oid)?.tasks())
     }
 
     /// Writes `dir/name → bytes` files (one directory level, as in the coord
-    /// layout) as git trees; returns the root tree OID.
-    fn write_tree(&self, files: &BTreeMap<String, Vec<u8>>) -> Result<String, GitError> {
+    /// layout) as git trees; returns the root tree OID. Blobs whose bytes are
+    /// in `known` reuse that OID; the rest are written in one batch.
+    fn write_tree(
+        &self,
+        files: &BTreeMap<String, Vec<u8>>,
+        known: &HashMap<&[u8], &str>,
+    ) -> Result<String, GitError> {
+        let fresh: Vec<&[u8]> = files
+            .values()
+            .map(Vec::as_slice)
+            .filter(|bytes| !known.contains_key(bytes))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let written: HashMap<&[u8], String> = fresh
+            .iter()
+            .copied()
+            .zip(self.git.hash_objects(&fresh)?)
+            .collect();
         let mut dirs: BTreeMap<&str, Vec<TreeEntry>> = BTreeMap::new();
         for (path, bytes) in files {
             let (dir, name) = path
                 .split_once('/')
                 .expect("coord files live one level below the root");
-            let blob = self.git.hash_object(bytes)?;
+            let blob = match known.get(bytes.as_slice()) {
+                Some(oid) => oid.to_string(),
+                None => written[bytes.as_slice()].clone(),
+            };
             dirs.entry(dir)
                 .or_default()
                 .push(TreeEntry::blob(name, blob));
@@ -302,6 +337,37 @@ impl<G: GitOps> CoordStore<G> {
             root.push(TreeEntry::tree(dir, self.git.mktree(&entries)?));
         }
         self.git.mktree(&root)
+    }
+}
+
+/// The blobs of one coordination commit: `(path, oid, bytes)`.
+struct Snapshot {
+    files: Vec<(String, String, Vec<u8>)>,
+}
+
+impl Snapshot {
+    /// The decoded `log/` events.
+    fn log(&self) -> (Vec<LeaseEvent>, Vec<DecodeIssue>) {
+        decode_log(
+            self.files
+                .iter()
+                .filter(|(path, _, _)| path.starts_with("log/"))
+                .map(|(path, _, bytes)| (path.as_str(), bytes.as_slice())),
+        )
+    }
+
+    /// The task registry: task id → record bytes.
+    fn tasks(&self) -> BTreeMap<String, Vec<u8>> {
+        self.files
+            .iter()
+            .filter_map(|(path, _, bytes)| {
+                let id = path
+                    .strip_prefix(TASKS_DIR)?
+                    .strip_prefix('/')?
+                    .strip_suffix(".json")?;
+                (!id.contains('/')).then(|| (id.to_string(), bytes.clone()))
+            })
+            .collect()
     }
 }
 

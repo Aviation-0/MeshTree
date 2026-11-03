@@ -255,31 +255,84 @@ fn spawn_shared(opts: &Options) -> Result<Row, String> {
 
 /// 2. Local claim acquire through the daemon.
 fn claim_local(opts: &Options) -> Result<Row, String> {
-    let repo = Fixture::new(opts)?;
-    let id = task_id(&repo.meshtree(&["spawn", "claims"])?)?;
-    let daemon = Daemon::start(opts, repo.root())?;
-    let mut samples = Vec::new();
-    for i in 0..opts.claim_samples {
-        let path = format!("bench/claim-{i}/**");
-        let begin = Instant::now();
-        daemon.call("claim_paths", json!({ "task_id": id, "paths": [path] }))?;
-        samples.push(begin.elapsed());
-        daemon.call("release_paths", json!({ "task_id": id, "paths": [path] }))?;
+    let mut parts = Vec::new();
+    let mut worst = Duration::ZERO;
+    for &logged in &LOG_SIZES {
+        let repo = Fixture::new(opts)?;
+        let id = task_id(&repo.meshtree(&["spawn", "claims"])?)?;
+        seed_log(repo.root(), logged)?;
+        let daemon = Daemon::start(opts, repo.root())?;
+        let mut samples = Vec::new();
+        for i in 0..opts.claim_samples {
+            let path = format!("bench/claim-{i}/**");
+            let begin = Instant::now();
+            daemon.call("claim_paths", json!({ "task_id": id, "paths": [path] }))?;
+            samples.push(begin.elapsed());
+            daemon.call("release_paths", json!({ "task_id": id, "paths": [path] }))?;
+        }
+        daemon.stop()?;
+        let p95 = percentile(&mut samples, 95);
+        worst = worst.max(p95);
+        parts.push((logged, p95, samples[samples.len() / 2]));
     }
-    daemon.stop()?;
-    let p95 = percentile(&mut samples, 95);
     Ok(Row {
         scenario: "Claim acquire (local)",
         target: "p95 < 50 ms",
-        measured: format!("p95 {:.1} ms", ms(p95)),
-        pass: p95 < Duration::from_millis(50),
+        measured: parts
+            .iter()
+            .map(|(n, p95, _)| format!("p95 {:.1} ms ({n} logged events)", ms(*p95)))
+            .collect::<Vec<_>>()
+            .join("; "),
+        pass: worst < Duration::from_millis(50),
         notes: format!(
-            "{} `claim_paths` IPC round trips (each a coordination-ref commit, no remote); \
-             median {:.1} ms",
-            samples.len(),
-            ms(samples[samples.len() / 2])
+            "{} `claim_paths` IPC round trips per log size (each a coordination-ref \
+             commit, no remote; the log is pre-seeded so history cost shows); medians {}",
+            opts.claim_samples,
+            parts
+                .iter()
+                .map(|(n, _, median)| format!("{:.1} ms at {n}", ms(*median)))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     })
+}
+
+/// Logged-event counts the local claim is measured at (`ADR-0009`: the
+/// cost must not grow with history).
+const LOG_SIZES: [usize; 2] = [100, 2_000];
+
+/// Pre-seeds `refs/meshtree/coord` with `n` ACQUIREs on distinct paths held
+/// by an unrelated task, in one sync round.
+fn seed_log(root: &Path, n: usize) -> Result<(), String> {
+    use meshtree_core::lease::{EventType, LeaseEvent, ReplayConfig};
+    use meshtree_core::{TaskId, TaskIdAllocator, Timestamp};
+    let holder = TaskId::from_ulid(1);
+    let mut alloc = TaskIdAllocator::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis() as u64;
+    let events: Vec<LeaseEvent> = (0..n)
+        .map(|i| LeaseEvent {
+            id: alloc.allocate(now, i as u128 + 1).as_str()[2..].to_string(),
+            kind: EventType::Acquire,
+            path: format!("seed/{i}/**"),
+            task: holder.clone(),
+            machine: "mc-bench-seed".to_string(),
+            ts: Timestamp::from_unix_ms(now),
+            counter: i as u64,
+            ttl_secs: Some(900),
+        })
+        .collect();
+    let store = meshtree_platform::coord::CoordStore::new(
+        meshtree_platform::gitops::CliGitOps::new(root),
+        None,
+        ReplayConfig {
+            default_ttl_secs: 900,
+            skew_grace_secs: 600,
+        },
+    );
+    store.sync(&events).map(drop).map_err(|e| e.to_string())
 }
 
 /// 3. Cross-machine claim: CAS push on clone A, then clone B pulls it.

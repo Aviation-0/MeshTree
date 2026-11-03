@@ -13,6 +13,7 @@ use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Error code for a rejected coordination-ref CAS per `SPEC.md` §16.
 pub const ERROR_CODE_CAS_REJECTED: &str = "MT-003";
@@ -184,6 +185,17 @@ pub trait GitOps {
     fn ls_tree(&self, treeish: &str) -> Result<Vec<TreeEntry>, GitError>;
     /// `git cat-file blob <oid>` → raw bytes.
     fn cat_blob(&self, oid: &str) -> Result<Vec<u8>, GitError>;
+    /// The contents of several blobs, in order. The default reads them one
+    /// by one; [`CliGitOps`] uses one `git cat-file --batch`.
+    fn cat_blobs(&self, oids: &[String]) -> Result<Vec<Vec<u8>>, GitError> {
+        oids.iter().map(|oid| self.cat_blob(oid)).collect()
+    }
+    /// Writes several blobs, returning their OIDs in order. The default
+    /// writes them one by one; [`CliGitOps`] uses one
+    /// `git hash-object -w --stdin-paths`.
+    fn hash_objects(&self, contents: &[&[u8]]) -> Result<Vec<String>, GitError> {
+        contents.iter().map(|c| self.hash_object(c)).collect()
+    }
     /// Fetches `src` from `remote` into local ref `dst` (forced). Returns the
     /// fetched OID, or `None` (leaving `dst` untouched) if `remote` has no `src`.
     fn fetch_ref(&self, remote: &str, src: &str, dst: &str) -> Result<Option<String>, GitError>;
@@ -251,13 +263,20 @@ impl CliGitOps {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command.spawn().map_err(spawn_err)?;
-        if let Some(bytes) = stdin {
-            // Inputs are small (one event / one tree level), so writing before
-            // reading cannot fill the output pipes.
-            let mut pipe = child.stdin.take().expect("stdin is piped");
-            pipe.write_all(bytes).map_err(spawn_err)?;
-        }
-        let output = child.wait_with_output().map_err(spawn_err)?;
+        // Feed stdin from a second thread: batch commands (`cat-file
+        // --batch`) write output while still reading input, so writing
+        // everything first could block on a full stdout pipe. A write error
+        // surfaces as git's exit status.
+        let pipe = child.stdin.take();
+        let output = std::thread::scope(|s| {
+            if let (Some(bytes), Some(mut pipe)) = (stdin, pipe) {
+                s.spawn(move || {
+                    let _ = pipe.write_all(bytes);
+                });
+            }
+            child.wait_with_output()
+        })
+        .map_err(spawn_err)?;
         if output.status.success() {
             Ok(output)
         } else {
@@ -483,6 +502,101 @@ impl GitOps for CliGitOps {
     fn cat_blob(&self, oid: &str) -> Result<Vec<u8>, GitError> {
         let output = self.run(&[OsStr::new("cat-file"), OsStr::new("blob"), OsStr::new(oid)])?;
         Ok(output.stdout)
+    }
+
+    fn cat_blobs(&self, oids: &[String]) -> Result<Vec<Vec<u8>>, GitError> {
+        if oids.len() <= 1 {
+            return oids.iter().map(|oid| self.cat_blob(oid)).collect();
+        }
+        let mut input = String::new();
+        for oid in oids {
+            input.push_str(oid);
+            input.push('\n');
+        }
+        let args = [OsStr::new("cat-file"), OsStr::new("--batch")];
+        let output = self.run_with(&args, Some(input.as_bytes()), &[])?;
+        let bad = |why: String| GitError::NonZeroExit {
+            context: self.context(&args),
+            code: None,
+            stderr: why,
+        };
+        // Records: "<oid> <type> <size>" LF <content> LF ("<oid> missing" LF).
+        let out = &output.stdout;
+        let mut at = 0;
+        let mut blobs = Vec::with_capacity(oids.len());
+        for oid in oids {
+            let end = out[at..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .map(|i| at + i)
+                .ok_or_else(|| bad(format!("truncated output at {oid}")))?;
+            let header = String::from_utf8_lossy(&out[at..end]).into_owned();
+            let size: usize = match header.split(' ').collect::<Vec<_>>()[..] {
+                [_, "blob", size] => size
+                    .parse()
+                    .map_err(|_| bad(format!("bad header `{header}`")))?,
+                _ => return Err(bad(format!("`{oid}`: {header}"))),
+            };
+            let start = end + 1;
+            let stop = start + size;
+            if stop > out.len() {
+                return Err(bad(format!("truncated blob {oid}")));
+            }
+            blobs.push(out[start..stop].to_vec());
+            at = stop + 1;
+        }
+        Ok(blobs)
+    }
+
+    fn hash_objects(&self, contents: &[&[u8]]) -> Result<Vec<String>, GitError> {
+        if contents.len() <= 1 {
+            return contents.iter().map(|c| self.hash_object(c)).collect();
+        }
+        static BATCH: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "mt-blobs-{}-{}",
+            std::process::id(),
+            BATCH.fetch_add(1, Ordering::Relaxed)
+        ));
+        let io_err = |source| GitError::Spawn {
+            context: format!("stage blobs in {}", dir.display()),
+            source,
+        };
+        std::fs::create_dir_all(&dir).map_err(io_err)?;
+        let result = (|| {
+            let mut paths = String::new();
+            for (i, bytes) in contents.iter().enumerate() {
+                let path = dir.join(i.to_string());
+                std::fs::write(&path, bytes).map_err(io_err)?;
+                paths.push_str(&path.to_string_lossy());
+                paths.push('\n');
+            }
+            let output = self.run_with(
+                &[
+                    OsStr::new("hash-object"),
+                    OsStr::new("-w"),
+                    OsStr::new("--no-filters"),
+                    OsStr::new("--stdin-paths"),
+                ],
+                Some(paths.as_bytes()),
+                &[],
+            )?;
+            let oids: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::to_string)
+                .collect();
+            if oids.len() == contents.len() {
+                Ok(oids)
+            } else {
+                Err(GitError::NonZeroExit {
+                    context: "git hash-object --stdin-paths".into(),
+                    code: None,
+                    stderr: format!("expected {} OIDs, got {}", contents.len(), oids.len()),
+                })
+            }
+        })();
+        let _ = std::fs::remove_dir_all(&dir);
+        result
     }
 
     fn fetch_ref(&self, remote: &str, src: &str, dst: &str) -> Result<Option<String>, GitError> {
