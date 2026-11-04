@@ -787,6 +787,9 @@ impl Daemon {
             note!("quarantine GC removed {}", path.display());
         }
         let mut inner = self.lock();
+        if let Err(err) = self.sweep_expired(&mut inner, now_ms) {
+            note!("lease sweep: {}", err.message);
+        }
         let tasks = match registry::list_tasks(&self.repo_root) {
             Ok(listing) => listing.tasks,
             Err(err) => {
@@ -817,6 +820,60 @@ impl Daemon {
                 note!("sweep {}: {}", task.id, err.message);
             }
         }
+    }
+
+    /// Emits one `EXPIRE_SWEEP` per lease expired at this daemon's clock
+    /// (any machine's: a vanished machine's leases are reaped this way,
+    /// `SPEC.md` §9, `ADR-0008`), journaled and committed like a claim.
+    /// Replay re-checks expiry at the sweep's own timestamp, so a sweep is a
+    /// no-op if the holder was in fact alive, and repeated sweeps (another
+    /// observer's too) are idempotent. Callers hold the operation mutex.
+    fn sweep_expired(&self, inner: &mut Inner, now_ms: u64) -> Result<usize, CliError> {
+        let mut leases = self.leases();
+        leases.refresh(&self.reader())?;
+        let due = leases.sweeps_due(Timestamp::from_unix_ms(now_ms));
+        if due.is_empty() {
+            return Ok(0);
+        }
+        let mut ids = TaskIdAllocator::new();
+        let counter = clock::now_unix_nanos();
+        let mut sweeps: Vec<LeaseEvent> = due
+            .iter()
+            .enumerate()
+            .map(|(i, lease)| LeaseEvent {
+                id: ids.allocate(now_ms, clock::entropy()).as_str()[2..].to_string(),
+                kind: EventType::ExpireSweep,
+                path: lease.path.clone(),
+                task: lease.task.clone(),
+                machine: machine_id(&self.config),
+                ts: Timestamp::from_unix_ms(now_ms),
+                counter: counter + i as u64,
+                ttl_secs: None,
+            })
+            .collect();
+        leases.lift(&mut sweeps);
+        let mut by_task: BTreeMap<TaskId, Vec<LeaseEvent>> = BTreeMap::new();
+        for e in &sweeps {
+            by_task.entry(e.task.clone()).or_default().push(e.clone());
+        }
+        inner.journal_all(
+            by_task
+                .into_iter()
+                .map(|(task, events)| WalOp::Events { task, events })
+                .collect(),
+        )?;
+        for lease in &due {
+            note!(
+                "{} sweeps {}'s expired lease on {} (holder machine {})",
+                machine_id(&self.config),
+                lease.task,
+                lease.path,
+                lease.machine
+            );
+        }
+        let n = sweeps.len();
+        leases.accept(sweeps);
+        Ok(n)
     }
 
     /// `active → abandoned` for a task unseen for `ttl_secs × 4` (§8).

@@ -66,10 +66,12 @@ pub enum WalOp {
     Claim { task: TaskId, paths: Vec<String> },
     /// Claims released by a task.
     Release { task: TaskId, paths: Vec<String> },
-    /// The lease events of an acknowledged claim or release, journaled
-    /// before the daemon answers (`SPEC.md` §10, `ADR-0009`): recovery
-    /// re-applies those missing from `refs/meshtree/coord`. Does not change
-    /// the replayed task state ([`WalOp::Claim`] / [`WalOp::Release`] do).
+    /// The lease events of an acknowledged claim or release, or the daemon's
+    /// `EXPIRE_SWEEP`s, journaled before they are acted on (`SPEC.md` §10,
+    /// `ADR-0009`): recovery re-applies those missing from
+    /// `refs/meshtree/coord`. Does not change the replayed task state
+    /// ([`WalOp::Claim`] / [`WalOp::Release`] do), so `task` (the lease
+    /// holder) need not be a task this WAL spawned.
     Events {
         task: TaskId,
         events: Vec<meshtree_core::lease::LeaseEvent>,
@@ -455,6 +457,11 @@ fn apply(state: &mut WalState, entry: &WalEntry) -> Result<(), String> {
         return Ok(());
     }
 
+    if let WalOp::Events { .. } = &entry.op {
+        // Lease events change no task state, and a sweep names the expired
+        // lease's holder, often another machine's task (T-053).
+        return Ok(());
+    }
     let task = state
         .tasks
         .get_mut(id)

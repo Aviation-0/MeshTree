@@ -239,7 +239,7 @@ Replay derives the lease table from the coordination tree. It is a pure function
 
 4. **Derive.** Rewrite `leases/` from the resulting table.
 
-Only `ACQUIRE` and `RELEASE` are written by claim operations. `HEARTBEAT` is written by the daemon supervisor for the claims of tasks still in use. `EXPIRE_SWEEP` may be written by any machine for a lease that `sweep_candidates(table, now, skew_grace_secs)` returns. The daemon emitter for `EXPIRE_SWEEP` is `T-053`.
+Only `ACQUIRE` and `RELEASE` are written by claim operations. `HEARTBEAT` is written by the daemon supervisor for the claims of tasks still in use. `EXPIRE_SWEEP` may be written by any machine for a lease that `sweep_candidates(table, now, skew_grace_secs)` returns. Since `T-053`, every daemon supervisor pass emits one `EXPIRE_SWEEP` per lease expired at its own clock (any machine's), journaled and committed like a claim.
 
 ### Conflict rule
 

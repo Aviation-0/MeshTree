@@ -25,9 +25,11 @@
 
 use crate::exit::{CliError, PLATFORM};
 use meshtree_core::lease::{
-    apply, replay_from, EventType, LeaseEvent, Replay, ReplayConfig, Snapshot, Watermark,
+    apply, replay_from, sweep_candidates, EventType, Lease, LeaseEvent, Replay, ReplayConfig,
+    Snapshot, Watermark,
 };
 use meshtree_core::pattern::conflicts_raw;
+use meshtree_core::Timestamp;
 use meshtree_core::{Rejection, TaskId};
 use meshtree_platform::coord::{CoordStore, COORD_REF};
 use meshtree_platform::gitops::{CliGitOps, GitOps};
@@ -204,6 +206,29 @@ impl Leases {
         self.since.map(|t| t.elapsed())
     }
 
+    /// Leases due for an `EXPIRE_SWEEP` at `now` (this daemon's clock):
+    /// expired by holder timestamps plus `skew_grace_secs`
+    /// (`sweep_candidates`, §9) in the committed state plus pending events,
+    /// without those this daemon already has a pending sweep for (at most
+    /// one per lease).
+    pub fn sweeps_due(&self, now: Timestamp) -> Vec<Lease> {
+        let mut state = self.base.clone();
+        let mut pending: Vec<&LeaseEvent> = self.pending.iter().collect();
+        pending.sort_by(|a, b| a.total_cmp(b));
+        for ev in pending {
+            apply(&mut state, ev, &self.config, &conflicts_raw);
+        }
+        sweep_candidates(&state.leases, now, self.config.skew_grace_secs)
+            .into_iter()
+            .filter(|lease| {
+                !self.pending.iter().any(|p| {
+                    p.kind == EventType::ExpireSweep && p.path == lease.path && p.task == lease.task
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
     /// The committed snapshot's watermark.
     pub fn watermark(&self) -> Option<&Watermark> {
         self.snapshot.as_ref().map(|s| &s.watermark)
@@ -216,7 +241,7 @@ impl Leases {
     pub fn lift(&self, events: &mut [LeaseEvent]) {
         if let Some(w) = self.watermark() {
             for e in events.iter_mut().filter(|e| w.covers(e)) {
-                e.ts = meshtree_core::Timestamp::from_unix_ms(w.ts.unix_ms().saturating_add(1));
+                e.ts = Timestamp::from_unix_ms(w.ts.unix_ms().saturating_add(1));
             }
         }
     }
@@ -337,7 +362,6 @@ fn is_oid(text: &str) -> bool {
 mod tests {
     use super::*;
     use meshtree_core::lease::{compact, replay};
-    use meshtree_core::Timestamp;
 
     const CONFIG: ReplayConfig = ReplayConfig {
         default_ttl_secs: 900,
@@ -560,6 +584,57 @@ mod tests {
             &BTreeMap::new(),
         );
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn sweeps_due_once_per_expired_lease() {
+        let mut l = leases();
+        // ttl 900 s + grace 600 s: expired after 1,500 s by holder time.
+        l.set_state(
+            Some("a".repeat(40)),
+            None,
+            vec![
+                ev("01A", EventType::Acquire, "gone/**", 1, 1_000),
+                ev("01B", EventType::Acquire, "live/**", 2, 1_000_000),
+            ],
+        );
+        let at = |s: u64| Timestamp::from_unix_ms(1_000 + s * 1000);
+        assert!(
+            l.sweeps_due(at(1_500)).is_empty(),
+            "never before ttl + grace"
+        );
+        let due = l.sweeps_due(at(1_501));
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].path, "gone/**");
+        // A pending sweep suppresses another one for the same lease.
+        let mut sweep = ev(
+            "01C",
+            EventType::ExpireSweep,
+            "gone/**",
+            1,
+            at(1_501).unix_ms(),
+        );
+        sweep.ttl_secs = None;
+        l.accept(vec![sweep]);
+        assert!(l.sweeps_due(at(1_600)).is_empty());
+        // A pending heartbeat from the holder keeps a lease alive.
+        let mut m = leases();
+        m.set_state(
+            Some("b".repeat(40)),
+            None,
+            vec![ev("01A", EventType::Acquire, "gone/**", 1, 1_000)],
+        );
+        let mut beat = ev(
+            "01H",
+            EventType::Heartbeat,
+            "gone/**",
+            1,
+            at(1_000).unix_ms(),
+        );
+        beat.ttl_secs = None;
+        m.accept(vec![beat]);
+        assert!(m.sweeps_due(at(1_600)).is_empty());
+        assert_eq!(m.sweeps_due(at(2_501)).len(), 1);
     }
 
     #[test]
