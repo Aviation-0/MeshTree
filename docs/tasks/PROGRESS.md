@@ -5,12 +5,12 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M4 — Chaos Suite, Coverage Gate & Technical Docs` (M2 done; M3 awaits human `T-045`)
-- **In-Progress Task (`doing`):** `T-056` — CAS round as overhead over the git floor (Claude Opus 5.5, Mac)
+- **In-Progress Task (`doing`):** none
 - **Next Up (`todo`, dependencies satisfied):**
-  1. `T-056` — `xtask bench` measures the CAS round as overhead over the plain-git floor (`ADR-0012`, accepted)
   2. `T-036` — dogfood case study (unblocked; needs real macOS + Windows agent sessions and a killed cloud sandbox)
   3. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; now gates `T-037`)
-- **Latest (2026-11-04, Claude Opus 5.5, Mac):** `ADR-0012` **Accepted** (Lucas Pan): §18 CAS-round row = overhead over the plain-git floor, p95 < 500 ms; `T-056` added to implement it in `xtask bench`.
+- **Latest (2026-11-04, Claude Opus 5.5, Mac):** `T-056` done — `xtask bench` measures the CAS round as overhead over the plain-git floor; full scale vs GitHub: run 2 met all six §18 rows (overhead p95 312 ms, median 219 ms), run 1 missed at 920 ms on a noisier network; CI run 41892413976 green.
+- **Earlier (2026-11-04, Claude Opus 5.5, Mac):** `ADR-0012` **Accepted** (Lucas Pan): §18 CAS-round row = overhead over the plain-git floor, p95 < 500 ms; `T-056` added to implement it in `xtask bench`.
 - **Earlier (2026-11-04, Claude Opus 5.5, Mac):** `T-055` done — coordination fetch in one round trip; GitHub CAS round p95 6.96 → 4.90 s; plain-git fetch + push floor is p95 2.70 s on this link, so `ADR-0012` (Proposed) redefines the row; CI run 41868627070 green.
 - **Earlier (2026-11-04, Claude Opus 5.5, Mac):** `T-051` done — full-scale benchmark against GitHub: 5 of 6 §18 rows met (spawn 207 ms on 2 GB, local claim p95 20–34 ms up to 10,000 events, 0 silent overwrites vs baseline 19–20 of 200, 0 `index.lock` collisions, recovery ≤ 200 ms); CAS round p95 ~6.96 s misses 2 s → follow-up `T-055`.
 - **Earlier (2026-11-03, Claude Opus 5.5, Mac):** `T-042` done — MCP registry `server.json` for the `meshtree-mcp` shim and `docs/mcp.md`; earlier the same session landed `T-052`, `T-054`, `T-035` and `T-041` (license `MIT OR Apache-2.0`); CI run 41703728559 green.
@@ -54,9 +54,9 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 12 | 0 | 0 | 0 | `done` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 8 | 0 | 0 | 1 | `doing` |
 | **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047`–`T-050`, `T-052`–`T-054` | 11 | 11 | 0 | 0 | 0 | `done` |
-| **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042`, `T-051`, `T-055`–`T-056` | 8 | 6 | 1 | 0 | 1 | `doing` |
+| **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042`, `T-051`, `T-055`–`T-056` | 8 | 7 | 0 | 0 | 1 | `doing` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-056`** | **56** | **51** | **1** | **0** | **4** | **91% (`51 / 56`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-056`** | **56** | **52** | **0** | **0** | **4** | **93% (`52 / 56`)** |
 
 ---
 

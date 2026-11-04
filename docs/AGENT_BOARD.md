@@ -8,9 +8,7 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Mac)
-- Task: T-056 (xtask bench: CAS round as overhead over git floor)
-- Status: doing
+- (none)
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +22,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-04 | Claude Opus 5.5 (Mac): T-056 done (52/56). Bench CAS row = overhead over paired git floor (ADR-0012). Full scale vs GitHub: run 2 all 6 met (overhead p95 312 ms), run 1 miss (920 ms, noisy net).
+  CI green (run 41892413976). Lock released. Next: T-036, T-045 (human sessions), then T-037/T-038.
 - 2026-11-04 | Claude Opus 5.5 (Mac): T-055 done (51/55). fetch_ref = one git fetch (glob + --prune); GitHub CAS round p95 6.96 -> 4.90 s. Git floor (fetch+push) p95 2.70 s here.
   ADR-0012 Proposed (row = overhead over git floor, p95 < 500 ms). CI green (run 41868627070). Lock released. Next: ADR-0012 decision, T-036, T-045.
 - 2026-11-04 | Claude Opus 5.5 (Mac): T-051 done (50/55). Full-scale bench vs GitHub: 5/6 met (spawn 207 ms @2 GB, claim p95 20-34 ms to 10k events, 0 overwrites vs 19-20/200, 0 index.lock, recovery <=200 ms).
@@ -32,5 +32,3 @@ Anti-Bloat Constraints:
   CI green (run 41703728559). Lock released. Next: T-051 (Mac), T-036; T-045 (human); release secrets + tap repos (Lucas).
 - 2026-11-03 | Claude Opus 5.5 (Windows): T-053 done. Supervisor emits one EXPIRE_SWEEP per expired lease (any machine), via WAL + bg commit; idempotent. wal: Events entries need no local task (2 lines, outside fence).
   CI green (run 41745062452). Next: T-051 (Mac), T-036, T-045 (human).
-- 2026-11-03 | Claude Opus 5.5 (Windows): T-050 done. Watermark snapshot compaction (core compact/replay_from, CoordStore larger-W merge, daemon compacts + re-issues late events). Claim p95 flat: 1-11 ms at 100/2,000/10,000 lifetime events, all OSes.
-  CI green (run 41742438911). Open: CLI-only claim lift above W. Next: T-053, T-051 (Mac).
