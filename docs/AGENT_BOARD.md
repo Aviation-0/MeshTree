@@ -8,9 +8,7 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Mac)
-- Task: T-051 (full-scale benchmark run)
-- Status: doing
+- (none)
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,15 +22,13 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-04 | Claude Opus 5.5 (Mac): T-051 done (50/55). Full-scale bench vs GitHub: 5/6 met (spawn 207 ms @2 GB, claim p95 20-34 ms to 10k events, 0 overwrites vs 19-20/200, 0 index.lock, recovery <=200 ms).
+  CAS round p95 ~6.96 s misses 2 s (ls-remote+fetch per sync) -> T-055. Lock released. Next: T-055, T-036 (humans), T-045.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-042 done (49/54). packages/meshtree-mcp/server.json (MCP registry format, live tool list), docs/mcp.md.
   CI green (run 41703728559). Lock released. Next: T-051 (Mac), T-036; T-045 (human); release secrets + tap repos (Lucas).
-- - 2026-11-03 | Claude Opus 5.5 (Windows): T-053 done. Supervisor emits one EXPIRE_SWEEP per expired lease (any machine), via WAL + bg commit; idempotent. wal: Events entries need no local task (2 lines, outside fence).
-    CI green (run 41745062452). Next: T-051 (Mac), T-036, T-045 (human).
-- - 2026-11-03 | Claude Opus 5.5 (Windows): T-050 done. Watermark snapshot compaction (core compact/replay_from, CoordStore larger-W merge, daemon compacts + re-issues late events). Claim p95 flat: 1-11 ms at 100/2,000/10,000 lifetime events, all OSes.
-    CI green (run 41742438911). Open: CLI-only claim lift above W. Next: T-053, T-051 (Mac).
-- - 2026-11-03 | Claude Opus 5.5 (Windows): T-049 done. In-memory daemon claims, WAL events (single fsync), 25 ms background commit, serialized coord writes, core segment-wise fast negative. Claim p95 @100 ev 4.6/26.2/25.1 ms (L/M/W).
-    CI green (run 41737248886). 2,000-ev row moved to T-050. Unblocked: T-050, T-053.
-- - 2026-11-03 | Claude Opus 5.5 (Windows): T-049 IN PROGRESS (lock held). Core segment-wise fast negative, serialized coord writes, single-fsync WAL batch; CI green. Claim p95 @2000 ev 60/118/92 ms (L/M/W) still > 50.
-    Remaining cost = full-log background flush (T-050). Needs Lucas: move 2,000-ev row to T-050 exit, or more bench samples.
-- 2026-11-03 | Claude Opus 5.5 (Mac): T-041 done (45/54). MIT OR Apache-2.0, crates.io metadata + READMEs, versioned path deps, CI publish dry-run job.
-  CI green (run 41701931244). Next: T-042.
+- 2026-11-03 | Claude Opus 5.5 (Windows): T-053 done. Supervisor emits one EXPIRE_SWEEP per expired lease (any machine), via WAL + bg commit; idempotent. wal: Events entries need no local task (2 lines, outside fence).
+  CI green (run 41745062452). Next: T-051 (Mac), T-036, T-045 (human).
+- 2026-11-03 | Claude Opus 5.5 (Windows): T-050 done. Watermark snapshot compaction (core compact/replay_from, CoordStore larger-W merge, daemon compacts + re-issues late events). Claim p95 flat: 1-11 ms at 100/2,000/10,000 lifetime events, all OSes.
+  CI green (run 41742438911). Open: CLI-only claim lift above W. Next: T-053, T-051 (Mac).
+- 2026-11-03 | Claude Opus 5.5 (Windows): T-049 done. In-memory daemon claims, WAL events (single fsync), 25 ms background commit, serialized coord writes, core segment-wise fast negative. Claim p95 @100 ev 4.6/26.2/25.1 ms (L/M/W).
+  CI green (run 41737248886). 2,000-ev row moved to T-050. Unblocked: T-050, T-053.

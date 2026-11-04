@@ -1,11 +1,40 @@
 # MeshTree Benchmarks
 
-Reproduce with `cargo run --release -p xtask -- bench` (`SPEC.md` §18); the run overwrites this file with a single-host report. Add `--smoke` for the CI sizes and `--remote <url>` to time scenario 3 against a real remote. Use a **throwaway** repository for `--remote`, because the bench pushes `main` and `refs/meshtree/coord` to it.
+Reproduce with `cargo run --release -p xtask -- bench` (`SPEC.md` §18); the run overwrites this file with a single-host report. Add `--smoke` for the CI sizes and `--remote <url>` to time scenario 3 against a real remote. Use a **throwaway** repository for `--remote`, because the bench pushes `main` and `refs/meshtree/coord` to it; the repository must be empty (no `main`) at the start of each run.
 
-## Status
+The run overwrites this file; the full-scale section below was assembled from two runs written elsewhere with `--out`.
 
-- **Full-scale results (2 GB `node_modules`, 20-round session, GitHub remote): not yet recorded.** The Windows development host cannot link Rust binaries, so the full run is pending on a host that can (the Mac).
-- The tables below are the **smoke-scale** results from the `xtask_bench_smoke_verifies_six_scenarios` test on the GitHub Actions 3-OS matrix (CI run 41557533637, debug build, shared runners).
+## Full-scale results (`T-051`, 2026-11-04)
+
+Host: Apple M1, 8 GB RAM, macOS 26.4.1, git 2.50.1, release build; scenario 3 against a private throwaway GitHub repository over HTTPS (`Aviation-0/meshtree-bench-scratch`). Two complete runs, the remote reset to empty in between (seed `0x5eedf00d3e577ee5`; parameters below).
+
+| Scenario | Target (§18) | Run 1 | Run 2 | Met |
+|---|---|---|---|---|
+| Spawn with shared `node_modules` (2048 MB, 32,768 files) | < 5 s | 207 ms (max of 3) | 201 ms (max of 3) | yes |
+| Claim acquire (local), 100 lifetime events | p95 < 50 ms | p95 20.4 ms | p95 34.0 ms | yes |
+| Claim acquire (local), 2,000 lifetime events | p95 < 50 ms | p95 21.2 ms | p95 22.1 ms | yes |
+| Claim acquire (local), 10,000 lifetime events | p95 < 50 ms | p95 20.3 ms | p95 21.9 ms | yes |
+| Cross-machine claim CAS round (GitHub) | p95 < 2 s | **p95 6961 ms** | **p95 6952 ms** | **no** |
+| Two agents, one repo: silent overwrites | 0 (baseline N > 0) | 0; baseline 19 of 200 | 0; baseline 20 of 200 | yes |
+| `index.lock` collisions | 0 with queue | 0; baseline 147 of 200 | 0; baseline 143 of 200 | yes |
+| Crash recovery (20 tasks) | < 2 s | 114 ms (WAL 91 ms) | 200 ms (WAL 169 ms) | yes |
+
+Parameters: 3 spawns; 200 local claims per history size; 30 CAS rounds; session 20 rounds × 5 edits × 2 agents over 6 shared files (MeshTree reported 80 claim conflicts, none silent); 8 index writers × 25 `git add -A`; 5 recoveries. Total run time 284.5 s and 279.7 s.
+
+Five of six rows meet their targets at full scale, and the silent-overwrite baseline is now N > 0 (19 and 20 lost updates of 200), which the smoke runs could not show reliably.
+
+### The CAS round miss
+
+A bench round is `meshtree claim` on clone A (no daemon) followed by `meshtree sync` on clone B, which must then see the lease. Measured by hand on the same host, 10 rounds: claim on A 1.9–2.3 s, sync on B 1.0–3.2 s, round median about 3.5 s with tails to 5–7 s; plain `git fetch` of the coordination ref from GitHub took 0.4–0.7 s and a push about 1.2 s. `GIT_TRACE` shows where the time goes: every sync round makes **two** network calls before any work, `git ls-remote` (to tell an absent remote ref from a failed fetch) and then `git fetch`, and the claim adds the `--force-with-lease` push. One bench round is therefore five GitHub round trips (A: ls-remote, fetch, push; B: ls-remote, fetch).
+
+Follow-up `T-055`: fetch the ref in one call (a glob refspec with `--prune` reports an absent ref as nothing fetched, without parsing git's localized error text), then re-measure. That removes two of the five round trips. On this link the remaining fetch + push + fetch still sits near 2 s, so `T-055` also has to settle whether §18's row means A's CAS round alone (fetch + push) or A plus B's visibility, as `T-034` defined it, before tuning further.
+
+With a daemon running, agents never wait on this: claims are answered from memory (local p95 above) and committed and pushed in the background (`ADR-0009`).
+
+## Smoke and history (earlier runs)
+
+The tables below are the **smoke-scale** results from the `xtask_bench_smoke_verifies_six_scenarios` test on the GitHub Actions 3-OS matrix (CI run 41557533637, debug build, shared runners), and the findings that led to `ADR-0009` and `ADR-0010`.
+
 - Smoke parameters:
   - spawn: 4 MB `node_modules` (64 files), 2 spawns;
   - local claim: 20 claims;
@@ -39,7 +68,7 @@ Bold cells miss the §18 target.
   | 2,000 lifetime events | 1.2 ms | 10.7 ms | 5.9 ms |
   | 10,000 lifetime events | 1.1 ms | 10.3 ms | 5.5 ms |
 
-  The earlier rows below were measured with 2,000 *live* claims timestamped "now", which no compaction can fold; that shape is not what a long-lived repository accumulates. The full-scale run (`T-051`) re-measures everything on the Mac.
+  The earlier rows below were measured with 2,000 *live* claims timestamped "now", which no compaction can fold; that shape is not what a long-lived repository accumulates. `T-051` re-measured everything at full scale on the Mac (above).
 
 - **Local claim misses `p95 < 50 ms` on every OS, and the cost grows with history.**
   - Each `claim_paths` runs a synchronous coordination-ref sync round. That round re-reads every `log/*.json` blob with one `git cat-file` process each and re-hashes every file of the tree with one `git hash-object` each: about 2N + L + 8 subprocesses for N logged events and L leases.
