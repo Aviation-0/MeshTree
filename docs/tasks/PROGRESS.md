@@ -5,7 +5,7 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 ## Current Focus
 
 - **Active Milestone:** `M4 — Chaos Suite, Coverage Gate & Technical Docs` (M2 done; M3 awaits human `T-045`)
-- **In-Progress Task (`doing`):** none
+- **In-Progress Task (`doing`):** `T-056` — CAS round as overhead over the git floor (Claude Opus 5.5, Mac)
 - **Next Up (`todo`, dependencies satisfied):**
   1. `T-056` — `xtask bench` measures the CAS round as overhead over the plain-git floor (`ADR-0012`, accepted)
   2. `T-036` — dogfood case study (unblocked; needs real macOS + Windows agent sessions and a killed cloud sandbox)
@@ -54,9 +54,9 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 | **M2 — Daemon, IPC, WAL, Shared Queue & Merge Gate** | Week 3 (`→ 2026-11-22`) | `T-015`–`T-021`, `T-039`–`T-040`, `T-043`–`T-044`, `T-046` | 12 | 12 | 0 | 0 | 0 | `done` |
 | **M3 — Sharing, Windows Teardown, Handoffs, MCP & MVP** | Week 4 (`→ 2026-11-28`) | `T-022`–`T-029`, `T-045` | 9 | 8 | 0 | 0 | 1 | `doing` |
 | **M4 — Chaos Suite, Coverage Gate & Technical Docs** | Weeks 5–6 (`→ 2026-12-12`) | `T-030`–`T-033`, `T-047`–`T-050`, `T-052`–`T-054` | 11 | 11 | 0 | 0 | 0 | `done` |
-| **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042`, `T-051`, `T-055`–`T-056` | 8 | 6 | 0 | 0 | 2 | `doing` |
+| **M5 — Benchmark Suite, Packaging & Dogfood Study** | Weeks 7–8 (`→ 2026-12-26`) | `T-034`–`T-036`, `T-041`–`T-042`, `T-051`, `T-055`–`T-056` | 8 | 6 | 1 | 0 | 1 | `doing` |
 | **M6 — Beta Triage & v1.0 Launch** | Weeks 9–10 (`→ 2027-01-08`) | `T-037`–`T-038` | 2 | 0 | 0 | 0 | 2 | `todo` |
-| **Total** | **Weeks 1–10** | **`T-001`–`T-056`** | **56** | **51** | **0** | **0** | **5** | **91% (`51 / 56`)** |
+| **Total** | **Weeks 1–10** | **`T-001`–`T-056`** | **56** | **51** | **1** | **0** | **4** | **91% (`51 / 56`)** |
 
 ---
 
