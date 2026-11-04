@@ -7,8 +7,8 @@ Updated at the start and end of every work session per `AGENTS.md`. Authoritativ
 - **Active Milestone:** `M4 — Chaos Suite, Coverage Gate & Technical Docs` (M2 done; M3 awaits human `T-045`)
 - **In-Progress Task (`doing`):** none
 - **Next Up (`todo`, dependencies satisfied):**
-  2. `T-036` — dogfood case study (unblocked; needs real macOS + Windows agent sessions and a killed cloud sandbox)
-  3. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; now gates `T-037`)
+  1. `T-036` — dogfood case study (unblocked; needs real macOS + Windows agent sessions and a killed cloud sandbox)
+  2. `T-045` — MVP acceptance: two real agents run the §18 scenario (**human-in-the-loop**; now gates `T-037`)
 - **Latest (2026-11-04, Claude Opus 5.5, Mac):** `T-056` done — `xtask bench` measures the CAS round as overhead over the plain-git floor; full scale vs GitHub: run 2 met all six §18 rows (overhead p95 312 ms, median 219 ms), run 1 missed at 920 ms on a noisier network; CI run 41892413976 green.
 - **Earlier (2026-11-04, Claude Opus 5.5, Mac):** `ADR-0012` **Accepted** (Lucas Pan): §18 CAS-round row = overhead over the plain-git floor, p95 < 500 ms; `T-056` added to implement it in `xtask bench`.
 - **Earlier (2026-11-04, Claude Opus 5.5, Mac):** `T-055` done — coordination fetch in one round trip; GitHub CAS round p95 6.96 → 4.90 s; plain-git fetch + push floor is p95 2.70 s on this link, so `ADR-0012` (Proposed) redefines the row; CI run 41868627070 green.
