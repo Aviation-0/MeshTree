@@ -196,8 +196,9 @@ pub trait GitOps {
     fn hash_objects(&self, contents: &[&[u8]]) -> Result<Vec<String>, GitError> {
         contents.iter().map(|c| self.hash_object(c)).collect()
     }
-    /// Fetches `src` from `remote` into local ref `dst` (forced). Returns the
-    /// fetched OID, or `None` (leaving `dst` untouched) if `remote` has no `src`.
+    /// Fetches `src` from `remote` into local ref `dst` (forced) in one
+    /// network round trip. Returns the fetched OID, or `None` if `remote` has
+    /// no `src` (a `dst` left from an earlier fetch is then pruned).
     fn fetch_ref(&self, remote: &str, src: &str, dst: &str) -> Result<Option<String>, GitError>;
     /// Cross-machine CAS (Appendix A): `git push <remote> <new-oid>:<reference>
     /// --force-with-lease=<reference>:<expected-old>`; `None` requires the
@@ -600,19 +601,17 @@ impl GitOps for CliGitOps {
     }
 
     fn fetch_ref(&self, remote: &str, src: &str, dst: &str) -> Result<Option<String>, GitError> {
-        // `ls-remote` first: fetching a missing ref is an error, not "absent".
-        let listed = self.run(&[OsStr::new("ls-remote"), OsStr::new(remote), OsStr::new(src)])?;
-        let exists = String::from_utf8_lossy(&listed.stdout)
-            .lines()
-            .any(|l| l.split('\t').nth(1) == Some(src));
-        if !exists {
-            return Ok(None);
-        }
-        let refspec = format!("+{src}:{dst}");
+        // One round trip (`T-055`). Fetching a missing ref by name is an
+        // error, so `src*` is fetched as a glob instead: an absent ref is
+        // simply nothing fetched, `--prune` drops a tracking ref whose remote
+        // ref was deleted, and no (localized) error text is parsed. The glob
+        // also matches longer names; only `dst` itself is read back.
+        let refspec = format!("+{src}*:{dst}*");
         self.run(&[
             OsStr::new("fetch"),
             OsStr::new("--quiet"),
             OsStr::new("--no-tags"),
+            OsStr::new("--prune"),
             OsStr::new(remote),
             OsStr::new(&refspec),
         ])?;

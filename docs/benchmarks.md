@@ -25,6 +25,21 @@ Five of six rows meet their targets at full scale, and the silent-overwrite base
 
 ### The CAS round miss
 
+**Update (`T-055`, 2026-11-04):** coordination fetches now take one network round trip instead of two (glob refspec + `--prune` in place of `ls-remote` + `fetch`). A third full run on the same host gave a **CAS round p95 of 4898 ms** (from 6961 / 6952 ms); every other row stayed met (spawn 222 ms; local claim p95 20.1–21.1 ms; 0 silent overwrites vs baseline 34 of 200; 0 `index.lock` collisions vs 140 of 200; recovery 91 ms). Measured by hand, 20 rounds each, same link:
+
+| Measurement | median | p95 |
+|---|---|---|
+| Plain git: `fetch` of the coordination ref | 0.56 s | 0.72 s |
+| Plain git: `--force-with-lease` push | 1.53 s | 2.16 s |
+| **Plain git: fetch + push (the CAS floor)** | **2.05 s** | **2.70 s** |
+| `meshtree claim` on A (fetch, replay, push) | 1.99 s | 3.00 s |
+| `meshtree sync` on B | 0.80 s | 1.86 s |
+| Bench round (A + B) | 2.82 s | 4.76 s |
+
+The git CAS alone exceeds 2 s at p95 on this link, so the §18 row cannot be met here by any implementation; a MeshTree claim now sits at the git floor (one fetch, one push). `ADR-0012` (Proposed) redefines the row as MeshTree's overhead over the plain-git floor (p95 < 500 ms), with absolute times reported alongside.
+
+The analysis below is from `T-051`, before that change.
+
 A bench round is `meshtree claim` on clone A (no daemon) followed by `meshtree sync` on clone B, which must then see the lease. Measured by hand on the same host, 10 rounds: claim on A 1.9–2.3 s, sync on B 1.0–3.2 s, round median about 3.5 s with tails to 5–7 s; plain `git fetch` of the coordination ref from GitHub took 0.4–0.7 s and a push about 1.2 s. `GIT_TRACE` shows where the time goes: every sync round makes **two** network calls before any work, `git ls-remote` (to tell an absent remote ref from a failed fetch) and then `git fetch`, and the claim adds the `--force-with-lease` push. One bench round is therefore five GitHub round trips (A: ls-remote, fetch, push; B: ls-remote, fetch).
 
 Follow-up `T-055`: fetch the ref in one call (a glob refspec with `--prune` reports an absent ref as nothing fetched, without parsing git's localized error text), then re-measure. That removes two of the five round trips. On this link the remaining fetch + push + fetch still sits near 2 s, so `T-055` also has to settle whether §18's row means A's CAS round alone (fetch + push) or A plus B's visibility, as `T-034` defined it, before tuning further.
