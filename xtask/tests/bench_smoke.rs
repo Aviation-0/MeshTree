@@ -102,6 +102,34 @@ fn xtask_bench_smoke_verifies_six_scenarios() {
         "index.lock collision through the queue: {:?}",
         report.rows[4]
     );
+    // Scenario 3 (ADR-0012): the paired git floor, the claim round, the
+    // overhead and B's visibility are all recorded; the network-call bound is
+    // deterministic, so it is asserted (the latency budget is not, on CI).
+    let cas = &report.rows[2];
+    for name in [
+        "floor_p95_ms",
+        "claim_p95_ms",
+        "visibility_p95_ms",
+        "max_fetches",
+        "max_pushes",
+    ] {
+        let value = cas
+            .metric(name)
+            .unwrap_or_else(|| panic!("{name}: {cas:?}"));
+        assert!(value > 0.0, "{name} = {value}: {cas:?}");
+    }
+    assert!(cas.metric("overhead_p95_ms").is_some(), "{cas:?}");
+    assert_eq!(
+        cas.metric("max_fetches"),
+        Some(1.0),
+        "one fetch per claim: {cas:?}"
+    );
+    assert_eq!(
+        cas.metric("max_pushes"),
+        Some(1.0),
+        "one push per claim: {cas:?}"
+    );
+    assert!(cas.target.contains("500 ms"), "{cas:?}");
     assert!(
         report.rows[0].notes.contains("node_modules linked: true"),
         "{:?}",

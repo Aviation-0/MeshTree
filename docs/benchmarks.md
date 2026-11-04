@@ -4,6 +4,25 @@ Reproduce with `cargo run --release -p xtask -- bench` (`SPEC.md` §18); the run
 
 The run overwrites this file; the full-scale section below was assembled from two runs written elsewhere with `--out`.
 
+## Current full-scale results (`T-056`, `ADR-0012`, 2026-11-04)
+
+Same host as below (Apple M1, 8 GB, macOS 26.4.1, git 2.50.1, release build), scenario 3 against the private throwaway GitHub repository over HTTPS, emptied before each run. Since `ADR-0012` the CAS row measures MeshTree's **overhead over a plain-git CAS floor**: each of 30 pairs runs a plain `git fetch` + `--force-with-lease` push of a separate ref (`refs/meshtree-bench/floor`) from its own clone, and a `meshtree claim` on clone A, alternating which goes first; overhead = claim − floor per pair. Every claim runs under `GIT_TRACE` to count its fetches and pushes.
+
+| Scenario | Target (§18) | Run 1 | Run 2 | Met |
+|---|---|---|---|---|
+| Spawn with shared `node_modules` (2048 MB) | < 5 s | 262 ms | 219 ms | yes / yes |
+| Claim acquire (local), 100 / 2,000 / 10,000 lifetime events | p95 < 50 ms | 23.5 / 26.2 / 20.3 ms | 24.2 / 26.9 / 27.0 ms | yes / yes |
+| Cross-machine claim CAS round: overhead over the git floor | p95 < 500 ms; ≤ 1 fetch + 1 push per claim | **p95 920 ms**; 1 fetch + 1 push | p95 312 ms, median 219 ms; 1 fetch + 1 push | **no** / yes |
+| ↳ claim round vs git floor (absolute) | reported | claim p95 2807 ms vs floor p95 2154 ms | claim p95 1929 / median 1747 ms vs floor p95 1835 / median 1546 ms | — |
+| ↳ B sees the lease (`sync` on clone B) | reported | p95 869 ms | p95 898 ms | — |
+| Two agents, one repo: silent overwrites | 0 (baseline N > 0) | 0; baseline 19 of 200 | 0; baseline 86 of 200 | yes / yes |
+| `index.lock` collisions | 0 with queue | 0; baseline 142 of 200 | 0; baseline 134 of 200 | yes / yes |
+| Crash recovery (20 tasks) | < 2 s | 88 ms | 108 ms | yes / yes |
+
+Run 2 met every row. Run 1 missed the overhead budget: its network was noisier (claim p95 2807 ms vs 1929 ms), and a p95 of per-pair differences carries the jitter of both sides. Run 1 predates the median columns, which run 2 added.
+
+**Where the overhead comes from.** On a local `file://` remote (no network) the same row gives an overhead p95 of 184–413 ms (4 pairs, release build). `GIT_TRACE` of one `meshtree claim` shows about 18 git processes started on the client against the floor's 4: besides `fetch` and `push`, the coordination round runs `config` (remote lookup), `ls-tree`, `cat-file`, `hash-object`, one `mktree` per directory (4), `commit-tree`, `update-ref` and extra `rev-parse`s, at about 11 ms per process start on this Mac. That matches the ~220 ms median overhead, and it is where any further margin would come from (one batched `mktree`, fewer lookups). With a daemon running, agents do not wait on this round at all (`ADR-0009`).
+
 ## Full-scale results (`T-051`, 2026-11-04)
 
 Host: Apple M1, 8 GB RAM, macOS 26.4.1, git 2.50.1, release build; scenario 3 against a private throwaway GitHub repository over HTTPS (`Aviation-0/meshtree-bench-scratch`). Two complete runs, the remote reset to empty in between (seed `0x5eedf00d3e577ee5`; parameters below).

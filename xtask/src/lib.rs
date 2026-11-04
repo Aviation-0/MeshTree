@@ -11,7 +11,7 @@
 //! |---|---|---|
 //! | 1 | spawn with a shared `node_modules` | slowest `meshtree spawn` wall time |
 //! | 2 | local claim | p95 of `claim_paths` round trips through the daemon |
-//! | 3 | cross-machine claim CAS round | p95 of claim (fetch + CAS push) on clone A plus `sync` on clone B |
+//! | 3 | cross-machine claim CAS round | p95 overhead of `meshtree claim` on clone A over a paired plain-git fetch + `--force-with-lease` push (`ADR-0012`); network calls per claim; B's visibility |
 //! | 4 | two agents, one repo | silent overwrites with MeshTree vs a shared-checkout baseline |
 //! | 5 | `index.lock` collisions | concurrent git index writers, through a concurrency-1 queue vs directly |
 //! | 6 | crash recovery | daemon restart after `SIGKILL` / `TerminateProcess` until it serves again |
@@ -114,6 +114,18 @@ pub struct Row {
     pub pass: bool,
     /// How it was measured.
     pub notes: String,
+    /// Named numbers behind `measured`, for tests (empty for most rows).
+    pub metrics: Vec<(&'static str, f64)>,
+}
+
+impl Row {
+    /// The metric named `name`, if the row records it.
+    pub fn metric(&self, name: &str) -> Option<f64> {
+        self.metrics
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| *v)
+    }
 }
 
 /// All six rows, in §18 order.
@@ -250,6 +262,7 @@ fn spawn_shared(opts: &Options) -> Result<Row, String> {
              node_modules linked: {linked}",
             opts.node_modules_mb
         ),
+        metrics: Vec::new(),
     })
 }
 
@@ -296,6 +309,7 @@ fn claim_local(opts: &Options) -> Result<Row, String> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        metrics: Vec::new(),
     })
 }
 
@@ -352,7 +366,18 @@ fn seed_log(root: &Path, n: usize) -> Result<(), String> {
     store.sync(&events).map(drop).map_err(|e| e.to_string())
 }
 
-/// 3. Cross-machine claim: CAS push on clone A, then clone B pulls it.
+/// Ref the plain-git floor rounds push to: same remote, same kind of
+/// update, without touching `refs/meshtree/coord`.
+const FLOOR_REF: &str = "refs/meshtree-bench/floor";
+
+/// 3. Cross-machine claim (`ADR-0012`): MeshTree's overhead over the git CAS.
+///
+/// Each sample pairs a plain-git floor round (fetch [`FLOOR_REF`], then a
+/// `--force-with-lease` push of a new commit, from a separate clone) with a
+/// `meshtree claim` round on clone A, alternating which runs first so network
+/// drift hits both alike. Overhead = claim − floor, per pair. Every claim runs
+/// under `GIT_TRACE` to count its fetches and pushes. Clone B's `sync` until
+/// it sees the lease is timed separately as cross-machine visibility.
 fn claim_cas(opts: &Options) -> Result<Row, String> {
     let scratch = Scratch::new()?;
     let (url, label) = match &opts.remote {
@@ -374,33 +399,166 @@ fn claim_cas(opts: &Options) -> Result<Row, String> {
             scratch.path(),
             &["clone", "-q", "-b", "main", &url, &path_str(&dir)],
         )?;
-        mt(&opts.meshtree, &dir, &["init"])?;
         Ok(dir)
     };
-    let (a, b) = (clone("a")?, clone("b")?);
+    let (a, b, floor) = (clone("a")?, clone("b")?, clone("floor")?);
+    for dir in [&a, &b] {
+        mt(&opts.meshtree, dir, &["init"])?;
+    }
     let id = task_id(&mt(&opts.meshtree, &a, &["spawn", "cas"])?)?;
-    let mut samples = Vec::new();
+    // The floor ref exists before timing starts, like the coordination ref
+    // after the first claim.
+    let mut floor_tip = floor_commit(&floor, None)?;
+    git(
+        &floor,
+        &["push", "-q", "origin", &format!("{floor_tip}:{FLOOR_REF}")],
+    )?;
+
+    let trace = scratch.path().join("trace.txt");
+    let (mut floors, mut claims, mut visibility) = (Vec::new(), Vec::new(), Vec::new());
+    let mut overheads = Vec::new();
+    let (mut max_fetches, mut max_pushes) = (0usize, 0usize);
     for i in 0..opts.cas_samples {
+        let mut floor_round = || -> Result<Duration, String> {
+            let begin = Instant::now();
+            floor_tip = floor_cas(&floor, &floor_tip)?;
+            Ok(begin.elapsed())
+        };
+        let claim_round = || -> Result<(Duration, usize, usize), String> {
+            fs::write(&trace, "").map_err(|e| e.to_string())?;
+            let begin = Instant::now();
+            mt_env(
+                &opts.meshtree,
+                &a,
+                &["claim", &id, &format!("cas/{i}/**")],
+                &[("GIT_TRACE", &path_str(&trace))],
+            )?;
+            let took = begin.elapsed();
+            let (fetches, pushes) = network_calls(&fs::read_to_string(&trace).unwrap_or_default());
+            Ok((took, fetches, pushes))
+        };
+        let (floor_took, (claim_took, fetches, pushes)) = if i % 2 == 0 {
+            let f = floor_round()?;
+            (f, claim_round()?)
+        } else {
+            let c = claim_round()?;
+            (floor_round()?, c)
+        };
         let begin = Instant::now();
-        mt(&opts.meshtree, &a, &["claim", &id, &format!("cas/{i}/**")])?;
         let out = mt(&opts.meshtree, &b, &["sync"])?;
-        samples.push(begin.elapsed());
+        visibility.push(begin.elapsed());
         if !String::from_utf8_lossy(&out.stdout).contains(&format!("leases: {}", i + 1)) {
             return Err(format!("clone B did not see claim {i}: {out:?}"));
         }
+        overheads.push(ms(claim_took) - ms(floor_took));
+        floors.push(floor_took);
+        claims.push(claim_took);
+        max_fetches = max_fetches.max(fetches);
+        max_pushes = max_pushes.max(pushes);
     }
-    let p95 = percentile(&mut samples, 95);
+    let floor_p50 = ms(percentile(&mut floors, 50));
+    let floor_p95 = ms(percentile(&mut floors, 95));
+    let claim_p50 = ms(percentile(&mut claims, 50));
+    let claim_p95 = ms(percentile(&mut claims, 95));
+    let visibility_p95 = ms(percentile(&mut visibility, 95));
+    let overhead_p50 = percentile_f64(&mut overheads, 50);
+    let overhead_p95 = percentile_f64(&mut overheads, 95);
+    let pass = overhead_p95 < 500.0 && max_fetches <= 1 && max_pushes <= 1;
     Ok(Row {
         scenario: "Cross-machine claim CAS round",
-        target: "p95 < 2 s",
-        measured: format!("p95 {:.0} ms", ms(p95)),
-        pass: p95 < Duration::from_secs(2),
-        notes: format!(
-            "{} rounds of `meshtree claim` on clone A (fetch, replay, `--force-with-lease` \
-             push) + `meshtree sync` on clone B, which must see the lease; {label}",
-            samples.len()
+        target: "overhead over the git floor p95 < 500 ms; ≤ 1 fetch + 1 push per claim",
+        measured: format!(
+            "overhead p95 {overhead_p95:.0} ms, median {overhead_p50:.0} ms (claim p95 \
+             {claim_p95:.0} / median {claim_p50:.0} ms vs git floor p95 {floor_p95:.0} / median \
+             {floor_p50:.0} ms); at most {max_fetches} fetch + {max_pushes} push per claim; B \
+             sees the lease: p95 {visibility_p95:.0} ms"
         ),
+        pass,
+        notes: format!(
+            "{} pairs, alternating order: plain-git fetch + `--force-with-lease` push of \
+             `{FLOOR_REF}` from a separate clone, and `meshtree claim` on clone A (fetch, \
+             replay, CAS push; network calls counted with `GIT_TRACE`); then `meshtree sync` \
+             on clone B until it sees the lease; {label}",
+            claims.len()
+        ),
+        metrics: vec![
+            ("floor_p50_ms", floor_p50),
+            ("floor_p95_ms", floor_p95),
+            ("claim_p50_ms", claim_p50),
+            ("claim_p95_ms", claim_p95),
+            ("overhead_p50_ms", overhead_p50),
+            ("overhead_p95_ms", overhead_p95),
+            ("visibility_p95_ms", visibility_p95),
+            ("max_fetches", max_fetches as f64),
+            ("max_pushes", max_pushes as f64),
+        ],
     })
+}
+
+/// Git's built-in empty tree (SHA-1), always present in every repository.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// A new commit on top of `parent` (an empty tree): the floor's payload.
+fn floor_commit(dir: &Path, parent: Option<&str>) -> Result<String, String> {
+    let mut args = vec![
+        "-c",
+        "user.name=MeshTree Bench",
+        "-c",
+        "user.email=bench@meshtree.invalid",
+        "commit-tree",
+        EMPTY_TREE,
+        "-m",
+        "floor",
+    ];
+    if let Some(parent) = parent {
+        args.extend(["-p", parent]);
+    }
+    Ok(git(dir, &args)?.trim().to_string())
+}
+
+/// One plain-git CAS round: fetch [`FLOOR_REF`], push a child commit with
+/// `--force-with-lease` on the fetched tip. Returns the new tip.
+fn floor_cas(dir: &Path, expected: &str) -> Result<String, String> {
+    git(
+        dir,
+        &[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "origin",
+            &format!("+{FLOOR_REF}:refs/remotes/floor"),
+        ],
+    )?;
+    let fetched = git(dir, &["rev-parse", "refs/remotes/floor"])?;
+    let fetched = fetched.trim();
+    if fetched != expected {
+        return Err(format!(
+            "floor ref moved unexpectedly: {fetched} != {expected}"
+        ));
+    }
+    let next = floor_commit(dir, Some(fetched))?;
+    git(
+        dir,
+        &[
+            "push",
+            "-q",
+            &format!("--force-with-lease={FLOOR_REF}:{fetched}"),
+            "origin",
+            &format!("{next}:{FLOOR_REF}"),
+        ],
+    )?;
+    Ok(next)
+}
+
+/// Network calls in a `GIT_TRACE` log: (`fetch` + `ls-remote`, `push`).
+fn network_calls(trace: &str) -> (usize, usize) {
+    let count = |cmd: &str| {
+        trace
+            .lines()
+            .filter(|l| l.contains(&format!("built-in: git {cmd}")))
+            .count()
+    };
+    (count("fetch ") + count("ls-remote "), count("push "))
 }
 
 /// Shared files both agents edit in scenario 4.
@@ -429,6 +587,7 @@ fn two_agents(opts: &Options) -> Result<Row, String> {
             with.conflicts,
             with.refused
         ),
+        metrics: Vec::new(),
     })
 }
 
@@ -675,6 +834,7 @@ fn index_lock(opts: &Options) -> Result<Row, String> {
              other queued failures: {}",
             opts.lock_workers, opts.lock_ops, queued.failures
         ),
+        metrics: Vec::new(),
     })
 }
 
@@ -764,6 +924,7 @@ fn crash_recovery(opts: &Options) -> Result<Row, String> {
              kills: chaos test `chaos_sigkill_daemon_mid_merge_recovers_under_2s`)",
             opts.recovery_tasks
         ),
+        metrics: Vec::new(),
     })
 }
 
@@ -928,6 +1089,25 @@ fn mt(bin: &Path, cwd: &Path, args: &[&str]) -> Result<Output, String> {
     }
 }
 
+/// [`mt`] with extra environment variables.
+fn mt_env(bin: &Path, cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<Output, String> {
+    let out = Command::new(bin)
+        .args(args)
+        .current_dir(cwd)
+        .envs(envs.iter().copied())
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("run {}: {e}", bin.display()))?;
+    if out.status.success() {
+        Ok(out)
+    } else {
+        Err(format!(
+            "meshtree {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ))
+    }
+}
+
 /// Runs `git <args>` in `cwd`, requiring success; returns stdout.
 fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
@@ -989,6 +1169,16 @@ fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
 
+/// Nearest-rank percentile of signed values (`p` in 1..=100); sorts `samples`.
+pub fn percentile_f64(samples: &mut [f64], p: usize) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    samples.sort_by(f64::total_cmp);
+    let rank = (p * samples.len()).div_ceil(100).max(1);
+    samples[rank - 1]
+}
+
 /// Nearest-rank percentile (`p` in 1..=100); sorts `samples`.
 pub fn percentile(samples: &mut [Duration], p: usize) -> Duration {
     if samples.is_empty() {
@@ -1029,6 +1219,27 @@ mod tests {
         let mut one = vec![Duration::from_millis(7)];
         assert_eq!(percentile(&mut one, 95), Duration::from_millis(7));
         assert_eq!(percentile(&mut [], 95), Duration::ZERO);
+    }
+
+    #[test]
+    fn percentile_f64_handles_negative_overheads() {
+        let mut v = vec![-40.0, 120.0, 5.0, -3.0, 80.0];
+        assert_eq!(percentile_f64(&mut v, 95), 120.0);
+        assert_eq!(percentile_f64(&mut v, 20), -40.0);
+        assert_eq!(percentile_f64(&mut [], 95), 0.0);
+    }
+
+    #[test]
+    fn network_calls_counts_fetches_and_pushes_in_a_trace() {
+        let trace = "\
+12:00:00.1 git.c:463 trace: built-in: git fetch --quiet --no-tags --prune origin +a*:b*
+12:00:00.2 run-command.c:673 trace: run_command: git-upload-pack '/r.git'
+12:00:00.3 git.c:463 trace: built-in: git rev-parse HEAD
+12:00:00.4 git.c:463 trace: built-in: git push --force-with-lease=x:y origin z:x
+12:00:00.5 git.c:463 trace: built-in: git ls-remote origin x
+";
+        assert_eq!(network_calls(trace), (2, 1));
+        assert_eq!(network_calls(""), (0, 0));
     }
 
     #[test]
