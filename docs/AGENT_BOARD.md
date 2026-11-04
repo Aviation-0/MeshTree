@@ -8,9 +8,6 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Windows)
-- Task: T-050 (coordination-log compaction, ADR-0010)
-- Status: doing
 - Model: Claude Opus 5.5 (Mac)
 - Task: T-042 (MCP directory listing manifest)
 - Status: doing
@@ -27,6 +24,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- - 2026-11-03 | Claude Opus 5.5 (Windows): T-050 done. Watermark snapshot compaction (core compact/replay_from, CoordStore larger-W merge, daemon compacts + re-issues late events). Claim p95 flat: 1-11 ms at 100/2,000/10,000 lifetime events, all OSes.
+    CI green (run 41742438911). Open: CLI-only claim lift above W. Next: T-053, T-051 (Mac).
 - - 2026-11-03 | Claude Opus 5.5 (Windows): T-049 done. In-memory daemon claims, WAL events (single fsync), 25 ms background commit, serialized coord writes, core segment-wise fast negative. Claim p95 @100 ev 4.6/26.2/25.1 ms (L/M/W).
     CI green (run 41737248886). 2,000-ev row moved to T-050. Unblocked: T-050, T-053.
 - - 2026-11-03 | Claude Opus 5.5 (Windows): T-049 IN PROGRESS (lock held). Core segment-wise fast negative, serialized coord writes, single-fsync WAL batch; CI green. Claim p95 @2000 ev 60/118/92 ms (L/M/W) still > 50.
@@ -35,5 +34,3 @@ Anti-Bloat Constraints:
   CI green (run 41701931244). Next: T-042.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-035 done (44/54). dist release.yml (+regen script), release-audit/-publish workflows (each channel gated on its secret), Scoop/winget templates, meshtree-mcp npx shim.
   CI green (run 41700134955). Unverified until first tag: release run, shim download, Windows zip layout. Next: T-041, T-042.
-- 2026-11-03 | Claude Opus 5.5 (Mac): T-054 done (43/54). Unix socket dir checked before bind; socket bound as .t<pid>, chmod 0600, renamed into place. security_ipc extended.
-  CI green (run 41698423294). Next: T-035 in progress.

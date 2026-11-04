@@ -31,6 +31,16 @@ Bold cells miss the §18 target.
 
 ## Findings
 
+- **After `T-050` (ADR-0010 compaction; CI run 41742438911):** the bench now seeds finished history (acquire/release pairs older than the compaction horizon), which the daemon folds into a snapshot. Local claims stay flat across history size; all six rows met on all three OSes:
+
+  | Local claim p95 | Linux | macOS | Windows |
+  |---|---|---|---|
+  | 100 lifetime events | 1.0 ms | 9.3 ms | 8.0 ms |
+  | 2,000 lifetime events | 1.2 ms | 10.7 ms | 5.9 ms |
+  | 10,000 lifetime events | 1.1 ms | 10.3 ms | 5.5 ms |
+
+  The earlier rows below were measured with 2,000 *live* claims timestamped "now", which no compaction can fold; that shape is not what a long-lived repository accumulates. The full-scale run (`T-051`) re-measures everything on the Mac.
+
 - **Local claim misses `p95 < 50 ms` on every OS, and the cost grows with history.**
   - Each `claim_paths` runs a synchronous coordination-ref sync round. That round re-reads every `log/*.json` blob with one `git cat-file` process each and re-hashes every file of the tree with one `git hash-object` each: about 2N + L + 8 subprocesses for N logged events and L leases.
   - The log is append-only, so claims slow down as a repository is used. Process creation is expensive on macOS and Windows, which is why those numbers are so much higher.
