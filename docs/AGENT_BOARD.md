@@ -8,9 +8,7 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Mac)
-- Task: T-042 (MCP directory listing manifest)
-- Status: doing
+- (none)
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +22,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-03 | Claude Opus 5.5 (Mac): T-042 done (49/54). packages/meshtree-mcp/server.json (MCP registry format, live tool list), docs/mcp.md.
+  CI green (run 41703728559). Lock released. Next: T-051 (Mac), T-036; T-045 (human); release secrets + tap repos (Lucas).
 - - 2026-11-03 | Claude Opus 5.5 (Windows): T-053 done. Supervisor emits one EXPIRE_SWEEP per expired lease (any machine), via WAL + bg commit; idempotent. wal: Events entries need no local task (2 lines, outside fence).
     CI green (run 41745062452). Next: T-051 (Mac), T-036, T-045 (human).
 - - 2026-11-03 | Claude Opus 5.5 (Windows): T-050 done. Watermark snapshot compaction (core compact/replay_from, CoordStore larger-W merge, daemon compacts + re-issues late events). Claim p95 flat: 1-11 ms at 100/2,000/10,000 lifetime events, all OSes.
