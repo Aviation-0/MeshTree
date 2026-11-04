@@ -1,6 +1,6 @@
 # ADR-0012: Measuring the Cross-Machine Claim CAS Round Against the Git Floor
 
-- **Status:** Proposed
+- **Status:** Accepted (accepted by Lucas Pan, 2026-11-04; `SPEC.md` §18 amended; implementation `T-056`)
 - **Date:** 2026-11-04
 - **Author:** Claude Opus 5.5 (Agent)
 - **Authority:** `SPEC.md` §9 (atomic update via CAS: fetch, then `--force-with-lease` push; bounded ×5 retry), §18 (benchmark row "Cross-machine claim CAS round: p95 < 2 s (GitHub remote RTT)"); `ADR-0001` (git via the CLI); `ADR-0009`; `AGENTS.md` Standing Order #1
@@ -30,9 +30,9 @@ Also relevant: with a daemon running, agents never wait on this round. Claims ar
 
 1. **Keep "p95 < 2 s" as an absolute target.** Unmeetable from this host; results would depend on whoever runs the bench. Rejected.
 2. **Measure only A's CAS round, absolute.** Still bounded below by the git floor (2.70 s here). Rejected for the same reason.
-3. **Measure MeshTree's overhead over the git floor, and report absolute times alongside (proposed).** The bench measures, interleaved in the same run against the same remote, the plain-git fetch + push floor and MeshTree's claim round, and holds MeshTree to a fixed overhead budget. Absolute numbers stay in the report so the network cost remains visible.
+3. **Measure MeshTree's overhead over the git floor, and report absolute times alongside (chosen).** The bench measures, interleaved in the same run against the same remote, the plain-git fetch + push floor and MeshTree's claim round, and holds MeshTree to a fixed overhead budget. Absolute numbers stay in the report so the network cost remains visible.
 
-## Decision (proposed)
+## Decision
 
 Replace the §18 row with:
 
@@ -52,5 +52,5 @@ Replace the §18 row with:
 ## Consequences
 
 - The row becomes reproducible on any host: it measures MeshTree, not the network.
-- A follow-up task implements it in `xtask bench` (interleaved floor rounds, overhead p95, B visibility as its own number) and records a full-scale run; until then `docs/benchmarks.md` reports this ADR's hand measurements.
+- `T-056` implements it in `xtask bench` (interleaved floor rounds, overhead p95, B visibility as its own number) and records a full-scale run; until then `docs/benchmarks.md` reports this ADR's hand measurements.
 - Users on slow links still see slow cross-machine visibility. The report keeps the absolute numbers so that is never hidden, and the daemon path keeps agents from waiting on it.

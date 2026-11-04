@@ -511,7 +511,7 @@ All tools return MeshTree error codes (§16) as MCP tool errors so agents can se
 |---|---|
 | Spawn on 2 GB `node_modules` repo | < 5 s (link-based sharing) |
 | Claim acquire (local) | p95 < 50 ms, including at ≥ 10,000 lifetime events (ADR-0010) |
-| Cross-machine claim CAS round | p95 < 2 s (GitHub remote RTT) |
+| Cross-machine claim CAS round | overhead over the plain-git CAS floor (fetch + `--force-with-lease` push, measured alternately in the same run): p95 < 500 ms, at most one fetch and one push per claim; absolute claim-round p95 and B's visibility reported alongside, measured against a GitHub remote (ADR-0012) |
 | Two agents, one repo, 20-min session | silent-overwrite incidents: **0** (baseline without MeshTree: N>0, reported) |
 | `index.lock` collisions | 0 with queue vs baseline |
 | Crash recovery | < 2 s |
