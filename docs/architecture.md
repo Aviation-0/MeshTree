@@ -243,7 +243,7 @@ A failed or unsupported strategy never fails `spawn`: anything partially created
 
 ## 10. Compaction in the writer (`ADR-0010`)
 
-**Specified; implemented by `T-050`.** The [rules are in `protocol.md` §5](protocol.md#5-compaction-adr-0010). In the daemon, compaction runs inside the background writer as an ordinary sync round: when more than 1,000 events are foldable, the round writes the new `snapshot/<W>.json` and drops the folded `log/` files. After a flush, the writer checks each WAL-journaled event of the current run. One that is absent from the ref and below the winning watermark is re-issued as a fresh event, so it passes through replay again.
+Implemented by `T-050`. The [rules are in `protocol.md` §5](protocol.md#5-compaction-adr-0010). In the daemon, compaction runs inside the background writer as an ordinary sync round: when more than 1,000 events are foldable, the round writes the new `snapshot/<W>.json` and drops the folded `log/` files. After a flush, the writer checks each WAL-journaled event of the current run. One that is absent from the ref and below the winning watermark is re-issued as a fresh event, so it passes through replay again.
 
 Because the snapshot is a function of the log alone, two daemons compacting concurrently produce byte-identical snapshots or converge on the larger watermark. Either way the CAS round resolves them like any other write.
 
@@ -259,7 +259,7 @@ A cloud-hosted agent session, such as an ephemeral sandbox that clones from the 
 
 Failure modes are the ordinary ones, made more frequent:
 
-- **A killed sandbox** leaves leases that expire by holder timestamp plus `skew_grace_secs`, and any machine may reap them with `EXPIRE_SWEEP`. The supervisor emitter for those sweeps is `T-053`.
+- **A killed sandbox** leaves leases that expire by holder timestamp plus `skew_grace_secs`, and every daemon's supervisor reaps them with an audited `EXPIRE_SWEEP` (`T-053`).
 - **A restored sandbox** finds a `daemon.lock` from a previous boot and adopts it (`MT-011`), provided its machine id is stable.
 - **An unmanaged cloud agent** holds no claims. Its changes are claim-checked only if they enter through a collected task branch (`MT-032`); a direct push to the base branch is protected only by git's own non-fast-forward rejection.
 

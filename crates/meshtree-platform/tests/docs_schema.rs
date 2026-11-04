@@ -9,13 +9,13 @@
 //! methods.
 
 use meshtree_core::handoff::HandoffRecord;
-use meshtree_core::lease::{Lease, LeaseEvent, Rejection};
+use meshtree_core::lease::{Lease, LeaseEvent, Rejection, Snapshot};
 use meshtree_core::queue::QueueTicket;
-use meshtree_core::{Task, TaskId, Timestamp};
+use meshtree_core::{Task, TaskId};
 use meshtree_platform::ipc::{Request, Response};
 use meshtree_platform::wal::WalEntry;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -87,15 +87,6 @@ fn assert_ulid(id: &str, at: &str) {
     );
 }
 
-/// The snapshot watermark: the §9 ordering key of the newest folded event.
-#[derive(Serialize, Deserialize)]
-struct Watermark {
-    ts: Timestamp,
-    counter: u64,
-    machine: String,
-    id: String,
-}
-
 fn check(kind: &str, value: &Value, at: &str) {
     match kind {
         "lease-event" => {
@@ -119,20 +110,13 @@ fn check(kind: &str, value: &Value, at: &str) {
             round_trip::<Task>(&record, at);
         }
         "snapshot" => {
-            let object = value.as_object().expect("snapshot is an object");
-            let keys: Vec<&str> = object.keys().map(String::as_str).collect();
-            assert_eq!(keys, ["leases", "rejected", "watermark"], "{at}");
-            let watermark: Watermark = round_trip(&object["watermark"], at);
-            assert_ulid(&watermark.id, at);
-            // The documented example is the type the code reads and writes.
-            drop(round_trip::<meshtree_core::lease::Snapshot>(value, at));
-            let leases: Vec<Lease> = round_trip(&object["leases"], at);
+            let snapshot: Snapshot = round_trip(value, at);
+            assert_ulid(&snapshot.watermark.id, at);
             assert!(
-                leases.windows(2).all(|w| w[0].path < w[1].path),
+                snapshot.leases.windows(2).all(|w| w[0].path < w[1].path),
                 "{at}: snapshot leases must be in path order"
             );
-            let rejected: Vec<String> = round_trip(&object["rejected"], at);
-            for id in &rejected {
+            for id in &snapshot.rejected {
                 assert_ulid(id, at);
             }
         }
