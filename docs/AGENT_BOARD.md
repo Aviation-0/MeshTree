@@ -8,9 +8,7 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Mac)
-- Task: T-058 (CLI events below compaction watermark re-issued)
-- Status: doing
+- (none)
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -24,6 +22,8 @@ Anti-Bloat Constraints:
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-05 | Claude Opus 5.5 (Mac): T-058 done (54/58). CLI claim/release/heartbeat re-issue events dropped below the snapshot watermark (was a silent no-op when the local clock trailed the log).
+  CI green (run 42027563161). Lock released. Next: T-036, T-045 (human sessions), then T-037/T-038.
 - 2026-11-05 | Claude Opus 5.5 (Mac): T-057 done (53/57). CLI claim 15 -> 8 git processes (tree_blobs, mktrees batch, refs_read, config fast path). CAS overhead median 219 -> 97 ms vs GitHub; all 6 rows met.
   CI green (run 41974576911). Lock released. Next: T-036, T-045 (human sessions), then T-037/T-038.
 - 2026-11-04 | Claude Opus 5.5 (Mac): T-056 done (52/56). Bench CAS row = overhead over paired git floor (ADR-0012). Full scale vs GitHub: run 2 all 6 met (overhead p95 312 ms), run 1 miss (920 ms, noisy net).
@@ -32,5 +32,3 @@ Anti-Bloat Constraints:
   ADR-0012 Proposed (row = overhead over git floor, p95 < 500 ms). CI green (run 41868627070). Lock released. Next: ADR-0012 decision, T-036, T-045.
 - 2026-11-04 | Claude Opus 5.5 (Mac): T-051 done (50/55). Full-scale bench vs GitHub: 5/6 met (spawn 207 ms @2 GB, claim p95 20-34 ms to 10k events, 0 overwrites vs 19-20/200, 0 index.lock, recovery <=200 ms).
   CAS round p95 ~6.96 s misses 2 s (ls-remote+fetch per sync) -> T-055. Lock released. Next: T-055, T-036 (humans), T-045.
-- 2026-11-03 | Claude Opus 5.5 (Mac): T-042 done (49/54). packages/meshtree-mcp/server.json (MCP registry format, live tool list), docs/mcp.md.
-  CI green (run 41703728559). Lock released. Next: T-051 (Mac), T-036; T-045 (human); release secrets + tap repos (Lucas).
