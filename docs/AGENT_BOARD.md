@@ -8,7 +8,9 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- (none)
+- Model: Claude Opus 5.5 (Mac)
+- Task: T-057 (fewer git processes per coord round / CLI claim)
+- Status: doing
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
