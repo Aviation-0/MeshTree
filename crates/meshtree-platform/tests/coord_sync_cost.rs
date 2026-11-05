@@ -1,6 +1,6 @@
 //! A coordination sync round costs the same number of git subprocesses
 //! however long the event log is (`SPEC.md` §9 daemon claim path, §18;
-//! `ADR-0009` Part 1).
+//! `ADR-0009` Part 1), and at most 8 (`T-057`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -144,6 +144,42 @@ impl GitOps for Counting {
         }
         self.inner.hash_objects(contents)
     }
+    fn tree_blobs(&self, treeish: &str) -> Result<Vec<(String, String, Vec<u8>)>, GitError> {
+        if !self.batched {
+            let entries: Vec<TreeEntry> = self
+                .ls_tree(treeish)?
+                .into_iter()
+                .filter(|e| e.kind == "blob")
+                .collect();
+            let oids: Vec<String> = entries.iter().map(|e| e.oid.clone()).collect();
+            let blobs = self.cat_blobs(&oids)?;
+            return Ok(entries
+                .into_iter()
+                .zip(blobs)
+                .map(|(e, b)| (e.path, e.oid, b))
+                .collect());
+        }
+        self.tick();
+        self.inner.tree_blobs(treeish)
+    }
+    fn mktrees(&self, trees: &[Vec<TreeEntry>]) -> Result<Vec<String>, GitError> {
+        if !self.batched {
+            return trees.iter().map(|t| self.mktree(t)).collect();
+        }
+        self.tick();
+        self.inner.mktrees(trees)
+    }
+    fn refs_read(&self, references: &[&str]) -> Result<Vec<Option<String>>, GitError> {
+        if !self.batched {
+            return references.iter().map(|r| self.ref_read(r)).collect();
+        }
+        self.tick();
+        self.inner.refs_read(references)
+    }
+    fn fetch_into(&self, remote: &str, src: &str, dst: &str) -> Result<(), GitError> {
+        self.tick();
+        self.inner.fetch_into(remote, src, dst)
+    }
     fn fetch_ref(&self, remote: &str, src: &str, dst: &str) -> Result<Option<String>, GitError> {
         self.tick();
         self.inner.fetch_ref(remote, src, dst)
@@ -209,7 +245,7 @@ fn coord_sync_subprocess_count_independent_of_log_length() {
         small, large,
         "git invocations per claim round: {small} at 100 events, {large} at 2,000"
     );
-    assert!(small <= 12, "{small} git invocations for one claim round");
+    assert!(small <= 8, "{small} git invocations for one claim round");
 
     // Same bytes as the one-blob-at-a-time path: batching changes the cost,
     // never the coordination tree (§9 byte-identical replay).

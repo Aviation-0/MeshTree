@@ -4,7 +4,22 @@ Reproduce with `cargo run --release -p xtask -- bench` (`SPEC.md` §18); the run
 
 The run overwrites this file; the full-scale section below was assembled from two runs written elsewhere with `--out`.
 
-## Current full-scale results (`T-056`, `ADR-0012`, 2026-11-04)
+## After `T-057` (fewer git processes, 2026-11-05)
+
+`T-057` cut the git processes a coordination round starts: one interactive `git cat-file --batch` reads a tip (tree walk plus pipelined blob reads) instead of `ls-tree` + `cat-file`; all trees go to one `git mktree --batch` (subtree ids hashed in-process and checked against git's); the local ref and the fetched tip are read together with one `for-each-ref`; an unchanged round is detected from the files already read instead of a `rev-parse`; and `meshtree claim` finds `origin` in `.git/config` without a `git config` process when the file plainly names it. A CLI claim now starts **8** git processes (from 15, counted with `GIT_TRACE2_EVENT`): `fetch`, `for-each-ref`, `cat-file`, `hash-object`, `mktree`, `commit-tree`, `update-ref`, `push`. A local round without a remote is 6 calls (budget 8, from 12).
+
+| CAS row | Before (`T-056` run 2) | After (`T-057`) |
+|---|---|---|
+| Overhead over the git floor, `file://` remote (release, 4 pairs) | p95 184–413 ms | **median 79–86 ms**, p95 88–165 ms |
+| Overhead over the git floor, GitHub (30 pairs) | median 219 ms, p95 312 ms | **median 97 ms**, p95 431 ms |
+| Claim vs git floor, GitHub (median) | 1747 vs 1546 ms | 2653 vs 2595 ms |
+| B sees the lease, GitHub (p95) | 898 ms | 1359 ms |
+
+The GitHub link was slower during the `T-057` run (floor median 2.6 s vs 1.5 s), which raises absolute times and the jitter in the per-pair p95; the median overhead is the like-for-like number. Every other row was met in the same run: spawn 183 ms, local claim p95 20.1–20.9 ms up to 10,000 events, 0 silent overwrites vs baseline 21 of 200, 0 `index.lock` collisions vs 146 of 200, recovery 73 ms.
+
+Runs on this Mac were made under `caffeinate -i`: an idle-sleep during a long unattended run stretches wall-clock times by minutes.
+
+## Full-scale results (`T-056`, `ADR-0012`, 2026-11-04)
 
 Same host as below (Apple M1, 8 GB, macOS 26.4.1, git 2.50.1, release build), scenario 3 against the private throwaway GitHub repository over HTTPS, emptied before each run. Since `ADR-0012` the CAS row measures MeshTree's **overhead over a plain-git CAS floor**: each of 30 pairs runs a plain `git fetch` + `--force-with-lease` push of a separate ref (`refs/meshtree-bench/floor`) from its own clone, and a `meshtree claim` on clone A, alternating which goes first; overhead = claim − floor per pair. Every claim runs under `GIT_TRACE` to count its fetches and pushes.
 

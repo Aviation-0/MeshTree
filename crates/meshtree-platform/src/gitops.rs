@@ -10,7 +10,7 @@
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -196,6 +196,41 @@ pub trait GitOps {
     fn hash_objects(&self, contents: &[&[u8]]) -> Result<Vec<String>, GitError> {
         contents.iter().map(|c| self.hash_object(c)).collect()
     }
+    /// Every blob under `treeish` as `(path, oid, bytes)`, in `ls-tree -r`
+    /// order. The default is [`GitOps::ls_tree`] plus [`GitOps::cat_blobs`];
+    /// [`CliGitOps`] walks the tree in one `git cat-file --batch` (`T-057`).
+    fn tree_blobs(&self, treeish: &str) -> Result<Vec<(String, String, Vec<u8>)>, GitError> {
+        let entries: Vec<TreeEntry> = self
+            .ls_tree(treeish)?
+            .into_iter()
+            .filter(|e| e.kind == "blob")
+            .collect();
+        let oids: Vec<String> = entries.iter().map(|e| e.oid.clone()).collect();
+        let blobs = self.cat_blobs(&oids)?;
+        Ok(entries
+            .into_iter()
+            .zip(blobs)
+            .map(|(e, bytes)| (e.path, e.oid, bytes))
+            .collect())
+    }
+    /// Writes several single-level trees in order and returns their OIDs; a
+    /// later tree may reference an earlier one. The default runs
+    /// [`GitOps::mktree`] per tree; [`CliGitOps`] uses one
+    /// `git mktree --batch` (`T-057`).
+    fn mktrees(&self, trees: &[Vec<TreeEntry>]) -> Result<Vec<String>, GitError> {
+        trees.iter().map(|t| self.mktree(t)).collect()
+    }
+    /// Reads several refs at once (`None` for an absent ref). The default
+    /// runs [`GitOps::ref_read`] per ref; [`CliGitOps`] uses one
+    /// `git for-each-ref` (`T-057`).
+    fn refs_read(&self, references: &[&str]) -> Result<Vec<Option<String>>, GitError> {
+        references.iter().map(|r| self.ref_read(r)).collect()
+    }
+    /// [`GitOps::fetch_ref`] without reading `dst` back: callers that read
+    /// several refs afterwards use [`GitOps::refs_read`] (`T-057`).
+    fn fetch_into(&self, remote: &str, src: &str, dst: &str) -> Result<(), GitError> {
+        self.fetch_ref(remote, src, dst).map(drop)
+    }
     /// Fetches `src` from `remote` into local ref `dst` (forced) in one
     /// network round trip. Returns the fetched OID, or `None` if `remote` has
     /// no `src` (a `dst` left from an earlier fetch is then pruned).
@@ -293,6 +328,78 @@ impl CliGitOps {
         self.run(args)?;
         Ok(())
     }
+
+    /// `true` if remote `name` has a URL. Answers without a git process when
+    /// the repository's own config file plainly sets `remote.<name>.url`;
+    /// otherwise (no such line, `[include]`s, old-style `[remote.x]`
+    /// headers, `GIT_DIR` / `GIT_CONFIG*` overrides) asks `git config`, so
+    /// the result always matches git's (`T-057`).
+    pub fn remote_configured(&self, name: &str) -> Result<bool, GitError> {
+        if local_config_sets_remote_url(&self.repo, name) {
+            return Ok(true);
+        }
+        Ok(self.remote_url(name)?.is_some())
+    }
+}
+
+/// The common git directory's `config` plainly contains `[remote "<name>"]`
+/// with a `url` key. `false` means "not sure", never "absent".
+fn local_config_sets_remote_url(repo: &Path, name: &str) -> bool {
+    let overridden = std::env::vars_os().any(|(k, _)| {
+        let k = k.to_string_lossy();
+        k == "GIT_DIR" || k == "GIT_COMMON_DIR" || k.starts_with("GIT_CONFIG")
+    });
+    if overridden {
+        return false;
+    }
+    let dot_git = repo.join(".git");
+    let git_dir = if dot_git.is_dir() {
+        dot_git
+    } else {
+        // A linked worktree: `.git` is a file `gitdir: <path>`.
+        let Ok(text) = std::fs::read_to_string(&dot_git) else {
+            return false;
+        };
+        let Some(path) = text.trim().strip_prefix("gitdir:") else {
+            return false;
+        };
+        repo.join(path.trim())
+    };
+    let common = match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(rel) => git_dir.join(rel.trim()),
+        Err(_) => git_dir,
+    };
+    let Ok(config) = std::fs::read_to_string(common.join("config")) else {
+        return false;
+    };
+    let mut in_remote = false;
+    for line in config.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.starts_with(';') || line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') {
+            let lower = line.to_ascii_lowercase();
+            if lower.starts_with("[include") || lower.starts_with("[remote.") {
+                return false;
+            }
+            // Section names are case-insensitive, subsection names are not.
+            in_remote = lower.starts_with("[remote ")
+                && line.ends_with(']')
+                && line
+                    .find('"')
+                    .zip(line.rfind('"'))
+                    .is_some_and(|(open, close)| close > open && line[open + 1..close] == *name);
+            continue;
+        }
+        if in_remote {
+            let key = line.split(['=', ' ', '\t']).next().unwrap_or("");
+            if key.eq_ignore_ascii_case("url") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 impl GitOps for CliGitOps {
@@ -606,16 +713,215 @@ impl GitOps for CliGitOps {
         // simply nothing fetched, `--prune` drops a tracking ref whose remote
         // ref was deleted, and no (localized) error text is parsed. The glob
         // also matches longer names; only `dst` itself is read back.
+        self.fetch_into(remote, src, dst)?;
+        self.ref_read(dst)
+    }
+
+    fn fetch_into(&self, remote: &str, src: &str, dst: &str) -> Result<(), GitError> {
         let refspec = format!("+{src}*:{dst}*");
-        self.run(&[
+        self.run_ok(&[
             OsStr::new("fetch"),
             OsStr::new("--quiet"),
             OsStr::new("--no-tags"),
             OsStr::new("--prune"),
             OsStr::new(remote),
             OsStr::new(&refspec),
-        ])?;
-        self.ref_read(dst)
+        ])
+    }
+
+    fn refs_read(&self, references: &[&str]) -> Result<Vec<Option<String>>, GitError> {
+        let mut args = vec![
+            OsStr::new("for-each-ref"),
+            OsStr::new("--format=%(refname) %(objectname)"),
+        ];
+        args.extend(references.iter().map(OsStr::new));
+        let output = self.run(&args)?;
+        let found: Vec<(String, String)> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|l| l.split_once(' '))
+            .map(|(name, oid)| (name.to_string(), oid.to_string()))
+            .collect();
+        // Patterns also match refs below them; only exact names count.
+        Ok(references
+            .iter()
+            .map(|r| {
+                found
+                    .iter()
+                    .find(|(name, _)| name == r)
+                    .map(|(_, oid)| oid.clone())
+            })
+            .collect())
+    }
+
+    fn mktrees(&self, trees: &[Vec<TreeEntry>]) -> Result<Vec<String>, GitError> {
+        // `--batch` separates trees with a blank line, which only works in
+        // newline mode (with `-z` git misreads the separator), so names that
+        // need quoting fall back to one `mktree -z` per tree.
+        let plain = |e: &TreeEntry| {
+            !e.path.is_empty()
+                && !e
+                    .path
+                    .bytes()
+                    .any(|b| b < 0x20 || b == b'"' || b == b'\\' || b >= 0x7f)
+        };
+        if trees.len() <= 1 || !trees.iter().flatten().all(plain) {
+            return trees.iter().map(|t| self.mktree(t)).collect();
+        }
+        let mut input = String::new();
+        for (i, tree) in trees.iter().enumerate() {
+            if i > 0 {
+                input.push('\n');
+            }
+            for e in tree {
+                input.push_str(&format!("{} {} {}\t{}\n", e.mode, e.kind, e.oid, e.path));
+            }
+        }
+        let args = [OsStr::new("mktree"), OsStr::new("--batch")];
+        let output = self.run_with(&args, Some(input.as_bytes()), &[])?;
+        let oids: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        if oids.len() == trees.len() {
+            Ok(oids)
+        } else {
+            Err(GitError::NonZeroExit {
+                context: self.context(&args),
+                code: None,
+                stderr: format!("expected {} tree OIDs, got {}", trees.len(), oids.len()),
+            })
+        }
+    }
+
+    fn tree_blobs(&self, treeish: &str) -> Result<Vec<(String, String, Vec<u8>)>, GitError> {
+        let args = [OsStr::new("cat-file"), OsStr::new("--batch")];
+        let context = self.context(&args);
+        let bad = |why: String| GitError::NonZeroExit {
+            context: context.clone(),
+            code: None,
+            stderr: why,
+        };
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(&self.repo)
+            .args(args)
+            .env("LC_ALL", "C")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|source| GitError::Spawn {
+                context: context.clone(),
+                source,
+            })?;
+        let mut stdin = child.stdin.take();
+        let mut stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
+        // One object from cat-file's output: "<oid> <type> <size>" LF data LF.
+        let read_one = |stdout: &mut BufReader<std::process::ChildStdout>,
+                        name: &str|
+         -> Result<(String, String, Vec<u8>), GitError> {
+            let mut header = String::new();
+            stdout
+                .read_line(&mut header)
+                .map_err(|e| bad(format!("read `{name}`: {e}")))?;
+            let fields: Vec<&str> = header.trim_end().split(' ').collect();
+            let [oid, kind, size] = fields[..] else {
+                return Err(bad(format!("`{name}`: {}", header.trim_end())));
+            };
+            let size: usize = size
+                .parse()
+                .map_err(|_| bad(format!("bad header `{}`", header.trim_end())))?;
+            let mut data = vec![0; size + 1];
+            stdout
+                .read_exact(&mut data)
+                .map_err(|e| bad(format!("read `{name}`: {e}")))?;
+            data.pop();
+            Ok((oid.to_string(), kind.to_string(), data))
+        };
+        let result = (|| {
+            // Trees are walked one request at a time: without `--buffer`,
+            // cat-file flushes after every object, so each answer can be read
+            // before the next request (the walk needs it to continue).
+            let mut ask = |name: &str| -> Result<(String, String, Vec<u8>), GitError> {
+                let pipe = stdin.as_mut().expect("stdin open during the walk");
+                writeln!(pipe, "{name}")
+                    .and_then(|()| pipe.flush())
+                    .map_err(|e| bad(format!("write `{name}`: {e}")))?;
+                read_one(&mut stdout, name)
+            };
+            let (root, kind, data) = ask(&format!("{treeish}^{{tree}}"))?;
+            if kind != "tree" {
+                return Err(bad(format!("`{treeish}` is a {kind}")));
+            }
+            let raw = root.len() / 2;
+            // Depth-first in tree order, as `ls-tree -r` lists blobs.
+            type Entries = std::vec::IntoIter<(String, String, String)>;
+            let mut blobs: Vec<(String, String)> = Vec::new();
+            let mut stack: Vec<(String, Entries)> = vec![(
+                String::new(),
+                parse_tree(&data, raw).map_err(bad)?.into_iter(),
+            )];
+            while let Some((prefix, entries)) = stack.last_mut() {
+                let Some((mode, name, oid)) = entries.next() else {
+                    stack.pop();
+                    continue;
+                };
+                let path = format!("{prefix}{name}");
+                if mode.starts_with('4') {
+                    let (_, _, sub) = ask(&oid)?;
+                    let sub = parse_tree(&sub, raw).map_err(bad)?;
+                    stack.push((format!("{path}/"), sub.into_iter()));
+                } else if mode.starts_with('1') {
+                    blobs.push((path, oid));
+                }
+            }
+            // Blobs need no answer before the next request: a writer thread
+            // sends them all while this thread reads the answers in order,
+            // so neither side waits on a full pipe.
+            let requests: String = blobs.iter().map(|(_, oid)| format!("{oid}\n")).collect();
+            let mut pipe = stdin.take().expect("stdin open after the walk");
+            std::thread::scope(|scope| {
+                scope.spawn(move || {
+                    let _ = pipe.write_all(requests.as_bytes());
+                    // Dropping `pipe` closes cat-file's stdin.
+                });
+                let mut files = Vec::with_capacity(blobs.len());
+                let mut failure = None;
+                for (path, oid) in blobs {
+                    match read_one(&mut stdout, &oid) {
+                        Ok((_, kind, bytes)) if kind == "blob" => files.push((path, oid, bytes)),
+                        Ok((_, kind, _)) => {
+                            failure = Some(bad(format!("{path}: expected a blob, got {kind}")));
+                            break;
+                        }
+                        Err(err) => {
+                            failure = Some(err);
+                            break;
+                        }
+                    }
+                }
+                match failure {
+                    None => Ok(files),
+                    Some(err) => {
+                        // Drain the rest so cat-file keeps reading and the
+                        // writer can finish; otherwise joining it could block
+                        // on a full pipe.
+                        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+                        Err(err)
+                    }
+                }
+            })
+        })();
+        drop(stdin);
+        let status = child.wait().map_err(|source| GitError::Spawn {
+            context: context.clone(),
+            source,
+        })?;
+        match result {
+            Ok(files) if status.success() => Ok(files),
+            Ok(_) => Err(bad(format!("exited with {status}"))),
+            Err(err) => Err(err),
+        }
     }
 
     fn push_ref_cas(
@@ -846,9 +1152,117 @@ fn stdout_line(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// Entries of a raw tree object: `(mode, name, hex oid)`; `raw` is the
+/// binary OID length (20 for SHA-1, 32 for SHA-256).
+fn parse_tree(data: &[u8], raw: usize) -> Result<Vec<(String, String, String)>, String> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < data.len() {
+        let space = data[at..]
+            .iter()
+            .position(|&b| b == b' ')
+            .ok_or("tree entry without a mode")?;
+        let nul = data[at + space..]
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or("tree entry without a name")?;
+        let mode = String::from_utf8_lossy(&data[at..at + space]).into_owned();
+        let name = String::from_utf8_lossy(&data[at + space + 1..at + space + nul]).into_owned();
+        let start = at + space + nul + 1;
+        let oid = data
+            .get(start..start + raw)
+            .ok_or("truncated tree entry")?
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        out.push((mode, name, oid));
+        at = start + raw;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::lost_push_race;
+    use super::{local_config_sets_remote_url, lost_push_race, parse_tree};
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn repo_with_config(name: &str, config: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mt-gitcfg-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        fs::write(dir.join(".git/config"), config).unwrap();
+        dir
+    }
+
+    #[test]
+    fn local_config_remote_fast_path_is_only_ever_a_safe_yes() {
+        let cases = [
+            (
+                "plain",
+                "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = https://x/y.git\n",
+                true,
+            ),
+            ("case", "[Remote \"origin\"]\nURL=file:///r.git\n", true),
+            (
+                "other",
+                "[remote \"upstream\"]\n\turl = https://x/y.git\n",
+                false,
+            ),
+            (
+                "subsection-case",
+                "[remote \"Origin\"]\n\turl = https://x/y.git\n",
+                false,
+            ),
+            (
+                "no-url",
+                "[remote \"origin\"]\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+                false,
+            ),
+            (
+                "include",
+                "[include]\n\tpath = other\n[remote \"origin\"]\n\turl = x\n",
+                false,
+            ),
+            ("old-style", "[remote.origin]\n\turl = x\n", false),
+            ("comment", "# [remote \"origin\"]\n# url = x\n", false),
+        ];
+        for (name, config, expected) in cases {
+            let dir = repo_with_config(name, config);
+            assert_eq!(
+                local_config_sets_remote_url(&dir, "origin"),
+                expected,
+                "{name}"
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        // A linked worktree reads the common directory's config.
+        let main = repo_with_config("main", "[remote \"origin\"]\n\turl = x\n");
+        let gitdir = main.join(".git/worktrees/wt");
+        fs::create_dir_all(&gitdir).unwrap();
+        fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        let wt = main.join("wt");
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+        assert!(local_config_sets_remote_url(&wt, "origin"));
+        let _ = fs::remove_dir_all(&main);
+    }
+
+    #[test]
+    fn parse_tree_reads_mode_name_and_oid() {
+        let mut data = b"100644 a.json\0".to_vec();
+        data.extend([0xab; 20]);
+        data.extend_from_slice(b"40000 log\0");
+        data.extend([0x01; 20]);
+        let entries = parse_tree(&data, 20).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, "100644");
+        assert_eq!(entries[0].1, "a.json");
+        assert_eq!(entries[0].2, "ab".repeat(20));
+        assert_eq!(entries[1].1, "log");
+        assert!(parse_tree(&data[..data.len() - 1], 20).is_err());
+    }
 
     #[test]
     fn push_race_classification() {

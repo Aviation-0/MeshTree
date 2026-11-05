@@ -34,7 +34,9 @@
 //! [`CoordStore::sync_with`] replace both.
 
 use crate::gitops::{GitError, GitOps, TreeEntry, ERROR_CODE_CAS_REJECTED};
-use meshtree_core::lease::coord::{decode_log, decode_snapshot, encode_compacted, DecodeIssue};
+use meshtree_core::lease::coord::{
+    decode_log, decode_snapshot, encode_compacted, sha1_hex, DecodeIssue,
+};
 use meshtree_core::lease::{
     compact, replay_from, LeaseEvent, Replay, ReplayConfig, Snapshot, Watermark,
 };
@@ -170,23 +172,11 @@ impl<G: GitOps> CoordStore<G> {
         &self.git
     }
 
-    /// Every blob of commit `oid`: one `ls-tree` and one batched read,
-    /// however long the log is (`ADR-0009` Part 1).
+    /// Every blob of commit `oid`, read in one pass however long the log is
+    /// (`ADR-0009` Part 1; one git process since `T-057`).
     fn tip(&self, oid: &str) -> Result<TipFiles, GitError> {
-        let entries: Vec<TreeEntry> = self
-            .git
-            .ls_tree(oid)?
-            .into_iter()
-            .filter(|e| e.kind == "blob")
-            .collect();
-        let oids: Vec<String> = entries.iter().map(|e| e.oid.clone()).collect();
-        let blobs = self.git.cat_blobs(&oids)?;
         Ok(TipFiles {
-            files: entries
-                .into_iter()
-                .zip(blobs)
-                .map(|(e, bytes)| (e.path, e.oid, bytes))
-                .collect(),
+            files: self.git.tree_blobs(oid)?,
         })
     }
 
@@ -210,13 +200,18 @@ impl<G: GitOps> CoordStore<G> {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let local = self.git.ref_read(COORD_REF)?;
-            let (remote_tip, mut deferred) = match &self.remote {
-                None => (None, None),
+            // Fetch first, then read the local ref and the fetched tip in one
+            // call (`T-057`); a failed fetch leaves only the local tip.
+            let (local, remote_tip, mut deferred) = match &self.remote {
+                None => (self.git.ref_read(COORD_REF)?, None, None),
                 Some(remote) => {
-                    match self.git.fetch_ref(remote, COORD_REF, &tracking_ref(remote)) {
-                        Ok(tip) => (tip, None),
-                        Err(err) => (None, Some(format!("fetch failed: {err}"))),
+                    let tracking = tracking_ref(remote);
+                    let fetched = self.git.fetch_into(remote, COORD_REF, &tracking);
+                    let refs = self.git.refs_read(&[COORD_REF, &tracking])?;
+                    let local = refs[0].clone();
+                    match fetched {
+                        Ok(()) => (local, refs[1].clone(), None),
+                        Err(err) => (local, None, Some(format!("fetch failed: {err}"))),
                     }
                 }
             };
@@ -300,24 +295,30 @@ impl<G: GitOps> CoordStore<G> {
             for (id, bytes) in registry {
                 files.insert(format!("{TASKS_DIR}/{id}.json"), bytes);
             }
-            // Blobs already in a tip are reused by content: only new or
-            // changed files are written.
-            let known: HashMap<&[u8], &str> = snapshots
-                .iter()
-                .flat_map(|s| s.files.iter())
-                .map(|(_, oid, bytes)| (bytes.as_slice(), oid.as_str()))
-                .collect();
-            let tree = self.write_tree(&files, &known)?;
-
             // Linear history on the remote tip (else the local tip); skip the
-            // commit entirely when the tree is unchanged.
+            // write and the commit entirely when the files are unchanged (the
+            // tree is canonical, so equal files mean an equal tree).
             let parent = remote_tip.clone().or_else(|| local.clone());
+            let unchanged = parent.as_deref().is_some_and(|p| {
+                tips.iter()
+                    .position(|t| *t == p)
+                    .is_some_and(|i| snapshots[i].same_files(&files))
+            });
             let new_oid = match &parent {
-                Some(p) if self.git.rev_parse(&format!("{p}^{{tree}}"))? == tree => p.clone(),
-                Some(p) => self
-                    .git
-                    .commit_tree(&tree, &[p.as_str()], "meshtree: coord sync")?,
-                None => self.git.commit_tree(&tree, &[], "meshtree: coord sync")?,
+                Some(p) if unchanged => p.clone(),
+                _ => {
+                    // Blobs already in a tip are reused by content: only new
+                    // or changed files are written.
+                    let known: HashMap<&[u8], &str> = snapshots
+                        .iter()
+                        .flat_map(|s| s.files.iter())
+                        .map(|(_, oid, bytes)| (bytes.as_slice(), oid.as_str()))
+                        .collect();
+                    let tree = self.write_tree(&files, &known)?;
+                    let parents: Vec<&str> = parent.iter().map(String::as_str).collect();
+                    self.git
+                        .commit_tree(&tree, &parents, "meshtree: coord sync")?
+                }
             };
 
             if local.as_deref() != Some(new_oid.as_str()) {
@@ -406,12 +407,72 @@ impl<G: GitOps> CoordStore<G> {
                 .or_default()
                 .push(TreeEntry::blob(name, blob));
         }
-        let mut root = Vec::new();
-        for (dir, entries) in dirs {
-            root.push(TreeEntry::tree(dir, self.git.mktree(&entries)?));
+        // Subtree OIDs are computed here so the root can name them, and all
+        // trees go to git in one batch (`T-057`); git's OIDs must agree.
+        let subtrees: Vec<Vec<TreeEntry>> = dirs.values().cloned().collect();
+        let Some(sub_oids) = subtrees
+            .iter()
+            .map(|t| tree_oid(t))
+            .collect::<Option<Vec<String>>>()
+        else {
+            // Not SHA-1 object names: one mktree per tree, root last.
+            let mut root = Vec::new();
+            for (dir, entries) in &dirs {
+                root.push(TreeEntry::tree(*dir, self.git.mktree(entries)?));
+            }
+            return self.git.mktree(&root);
+        };
+        let root: Vec<TreeEntry> = dirs
+            .keys()
+            .zip(&sub_oids)
+            .map(|(dir, oid)| TreeEntry::tree(*dir, oid.clone()))
+            .collect();
+        let mut trees = subtrees;
+        trees.push(root);
+        let written = self.git.mktrees(&trees)?;
+        if written[..written.len() - 1] != sub_oids[..] {
+            return Err(GitError::NonZeroExit {
+                context: "git mktree --batch".into(),
+                code: None,
+                stderr: format!("tree OIDs {written:?} differ from computed {sub_oids:?}"),
+            });
         }
-        self.git.mktree(&root)
+        Ok(written[written.len() - 1].clone())
     }
+}
+
+/// The SHA-1 OID git gives a tree of `entries` (`None` if an entry's OID is
+/// not SHA-1 hex). Entries sort by name, a subtree's name compared as if it
+/// ended in `/`, exactly as git orders them.
+fn tree_oid(entries: &[TreeEntry]) -> Option<String> {
+    let mut sorted: Vec<(Vec<u8>, &TreeEntry)> = entries
+        .iter()
+        .map(|e| {
+            let mut key = e.path.as_bytes().to_vec();
+            if e.kind == "tree" {
+                key.push(b'/');
+            }
+            (key, e)
+        })
+        .collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut body = Vec::new();
+    for (_, e) in sorted {
+        if e.oid.len() != 40 {
+            return None;
+        }
+        // Git stores a subtree's mode without the leading zero.
+        body.extend_from_slice(e.mode.trim_start_matches('0').as_bytes());
+        body.push(b' ');
+        body.extend_from_slice(e.path.as_bytes());
+        body.push(0);
+        for i in (0..40).step_by(2) {
+            body.push(u8::from_str_radix(e.oid.get(i..i + 2)?, 16).ok()?);
+        }
+    }
+    let mut object = format!("tree {}\0", body.len()).into_bytes();
+    object.extend_from_slice(&body);
+    Some(sha1_hex(&object))
 }
 
 /// The blobs of one coordination commit: `(path, oid, bytes)`.
@@ -420,6 +481,15 @@ struct TipFiles {
 }
 
 impl TipFiles {
+    /// `true` when this tip holds exactly `files` (paths and bytes).
+    fn same_files(&self, files: &BTreeMap<String, Vec<u8>>) -> bool {
+        self.files.len() == files.len()
+            && self
+                .files
+                .iter()
+                .all(|(path, _, bytes)| files.get(path) == Some(bytes))
+    }
+
     /// The decoded `log/` events.
     fn log(&self) -> (Vec<LeaseEvent>, Vec<DecodeIssue>) {
         decode_log(

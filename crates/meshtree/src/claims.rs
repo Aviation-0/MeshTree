@@ -19,7 +19,7 @@ use meshtree_core::lease::{EventType, LeaseEvent, ReplayConfig, ERROR_CODE_CLAIM
 use meshtree_core::pattern::normalize;
 use meshtree_core::{Config, Task, TaskId, TaskIdAllocator, TaskStatus, Timestamp};
 use meshtree_platform::coord::{CoordError, CoordStore, SyncOutcome};
-use meshtree_platform::gitops::{CliGitOps, GitOps};
+use meshtree_platform::gitops::CliGitOps;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -42,9 +42,9 @@ pub fn normalize_all(globs: &[String]) -> Result<Vec<String>, CliError> {
 pub fn store(repo_root: &Path, config: &Config) -> Result<CoordStore<CliGitOps>, CliError> {
     let git = CliGitOps::new(repo_root);
     let remote = git
-        .remote_url(REMOTE)
+        .remote_configured(REMOTE)
         .map_err(|err| CliError::new(PLATFORM, err.to_string()))?
-        .map(|_| REMOTE.to_string());
+        .then(|| REMOTE.to_string());
     Ok(CoordStore::new(git, remote, replay_config(config)))
 }
 

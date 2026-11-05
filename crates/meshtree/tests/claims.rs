@@ -182,3 +182,60 @@ fn cli_sync_flushes_and_pulls_coord_ref() {
     let out = meshtree(win.path(), &["sync"]);
     assert!(String::from_utf8_lossy(&out.stdout).contains("leases: 2"));
 }
+
+/// Git processes `meshtree claim` itself starts (`T-057`), from a
+/// `GIT_TRACE2_EVENT` log: a top-level process has a session id without `/`;
+/// children git starts on its own (pack-objects, upload-pack, maintenance…)
+/// nest under their parent's id and are not counted.
+fn top_level_git(trace: &Path) -> Vec<String> {
+    fs::read_to_string(trace)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|e| e["event"] == "start" && !e["sid"].as_str().unwrap_or("/").contains('/'))
+        .map(|e| {
+            let argv: Vec<&str> = e["argv"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            // `git -C <repo> <command> …`
+            argv.get(3).copied().unwrap_or("?").to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn cli_claim_git_process_budget() {
+    let remote = TempDir::bare();
+    let repo = initialized_repo();
+    let root = repo.path();
+    git(root, &["remote", "add", "origin", &remote.file_url()]);
+    git(root, &["push", "-q", "origin", "main"]);
+    let id = spawn(root, &["budget"]);
+    // The first claim creates the coordination ref on the remote.
+    assert_exit(&meshtree(root, &["claim", &id, "first/**"]), 0);
+
+    let trace = root.join(".meshtree").join("trace2.json");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_meshtree"))
+        .args(["claim", &id, "second/**"])
+        .current_dir(root)
+        .env("GIT_TRACE2_EVENT", &trace)
+        .output()
+        .unwrap();
+    assert_exit(&out, 0);
+    let started = top_level_git(&trace);
+    assert!(
+        started.iter().filter(|c| *c == "fetch").count() == 1
+            && started.iter().filter(|c| *c == "push").count() == 1,
+        "one fetch and one push: {started:?}"
+    );
+    assert!(
+        !started.iter().any(|c| c == "config"),
+        "the remote is found without `git config` when .git/config names it: {started:?}"
+    );
+    assert!(
+        started.len() <= 9,
+        "{} git processes for one claim: {started:?}",
+        started.len()
+    );
+}
