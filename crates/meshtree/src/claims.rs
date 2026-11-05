@@ -108,6 +108,49 @@ pub(crate) fn events(
         .collect()
 }
 
+/// Most sync rounds one batch of lease events may take to land above the
+/// snapshot watermark (it can move between rounds).
+const LIFT_ATTEMPTS: usize = 3;
+
+/// Syncs lease events, re-issuing any the round dropped below the snapshot
+/// watermark as fresh events just above it (`SPEC.md` §9 Compaction,
+/// `ADR-0010` rule 5). That happens when this machine's clock trails the
+/// log's newest event; without it a claim would report success while no
+/// lease was recorded. Returns the outcome and the events as committed.
+fn sync_events(
+    store: &CoordStore<CliGitOps>,
+    mut batch: Vec<LeaseEvent>,
+) -> Result<(SyncOutcome, Vec<LeaseEvent>), CliError> {
+    let mut outcome = store.sync(&batch).map_err(coord_error)?;
+    let mut attempts = 1;
+    while !outcome.dropped.is_empty() {
+        let Some(w) = outcome.watermark.clone() else {
+            break;
+        };
+        if attempts == LIFT_ATTEMPTS {
+            return Err(CliError::new(
+                PLATFORM,
+                format!(
+                    "{} lease event(s) stayed below the coordination snapshot watermark \
+                     after {attempts} rounds; check this machine's clock",
+                    outcome.dropped.len()
+                ),
+            ));
+        }
+        let lifted_ms = w.ts.unix_ms().saturating_add(1);
+        let mut alloc = TaskIdAllocator::new();
+        let mut lifted = Vec::new();
+        for e in batch.iter_mut().filter(|e| outcome.dropped.contains(&e.id)) {
+            e.id = alloc.allocate(lifted_ms, clock::entropy()).as_str()[2..].to_string();
+            e.ts = Timestamp::from_unix_ms(lifted_ms);
+            lifted.push(e.clone());
+        }
+        outcome = store.sync(&lifted).map_err(coord_error)?;
+        attempts += 1;
+    }
+    Ok((outcome, batch))
+}
+
 /// Acquires every path for `task`, or none (`MT-001` on any conflict).
 /// `ttl_secs` overrides `lease.ttl_secs` for these leases (§15
 /// `claim_paths`).
@@ -127,7 +170,7 @@ pub fn acquire(
         &machine,
         ttl_secs.unwrap_or(config.lease.ttl_secs),
     );
-    let outcome = store.sync(&batch).map_err(coord_error)?;
+    let (outcome, batch) = sync_events(&store, batch)?;
     let ids: BTreeSet<&str> = batch.iter().map(|e| e.id.as_str()).collect();
     let rejected: Vec<_> = outcome
         .replay
@@ -146,7 +189,7 @@ pub fn acquire(
         .collect();
     if !granted.is_empty() {
         let undo = events(EventType::Release, task, &granted, &machine, 0);
-        store.sync(&undo).map_err(coord_error)?;
+        sync_events(&store, undo)?;
     }
     Err(conflict_error(&rejected))
 }
@@ -160,7 +203,7 @@ pub fn release(
 ) -> Result<SyncOutcome, CliError> {
     let machine = machine_id(config);
     let batch = events(EventType::Release, task, paths, &machine, 0);
-    store(repo_root, config)?.sync(&batch).map_err(coord_error)
+    sync_events(&store(repo_root, config)?, batch).map(|(outcome, _)| outcome)
 }
 
 /// Loads an `active` task for a claim operation.
@@ -320,7 +363,7 @@ pub fn heartbeat(
 ) -> Result<SyncOutcome, CliError> {
     let machine = machine_id(config);
     let batch = events(EventType::Heartbeat, task, paths, &machine, 0);
-    store(repo_root, config)?.sync(&batch).map_err(coord_error)
+    sync_events(&store(repo_root, config)?, batch).map(|(outcome, _)| outcome)
 }
 
 /// A local claim revoked by a remote winner (§9: the claiming daemon is

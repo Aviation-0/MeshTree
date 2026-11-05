@@ -239,3 +239,87 @@ fn cli_claim_git_process_budget() {
         started.len()
     );
 }
+
+/// `git <args>` in `repo` with extra environment; stdout, trimmed.
+fn git_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .envs(envs.iter().copied())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn cli_claim_behind_future_watermark_is_recorded() {
+    // Another machine whose clock runs 48 h ahead compacted the log: the
+    // snapshot watermark is in this machine's future, so events stamped with
+    // the local clock fall below it (SPEC §9 Compaction, ADR-0010 rule 5).
+    let repo = initialized_repo();
+    let root = repo.path();
+    let a = spawn(root, &["ahead-a"]);
+    let b = spawn(root, &["ahead-b"]);
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let w_ms = now_ms + 48 * 3_600_000;
+    let mut alloc = meshtree_core::TaskIdAllocator::new();
+    let w_id = alloc.allocate(w_ms, 7).as_str()[2..].to_string();
+    let ts = meshtree_core::Timestamp::from_unix_ms(w_ms).to_rfc3339();
+    let snapshot = format!(
+        "{{\n  \"watermark\": {{\n    \"ts\": \"{ts}\",\n    \"counter\": 1,\n    \"machine\": \"mc-ahead\",\n    \"id\": \"{w_id}\"\n  }},\n  \"leases\": [],\n  \"rejected\": []\n}}\n"
+    );
+    let file = root.join(".meshtree").join("snapshot.json");
+    fs::write(&file, snapshot).unwrap();
+    let blob = git_env(root, &["hash-object", "-w", file.to_str().unwrap()], &[]);
+    let index = root.join(".meshtree").join("coord.index");
+    let index_env = [("GIT_INDEX_FILE", index.to_str().unwrap())];
+    let name = format!("snapshot/{w_ms}-1-mc-ahead-{w_id}.json");
+    git_env(
+        root,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{blob},{name}"),
+        ],
+        &index_env,
+    );
+    let tree = git_env(root, &["write-tree"], &index_env);
+    let commit = git_env(
+        root,
+        &["commit-tree", &tree, "-m", "ahead"],
+        &[
+            ("GIT_AUTHOR_NAME", "t"),
+            ("GIT_AUTHOR_EMAIL", "t@example.invalid"),
+            ("GIT_COMMITTER_NAME", "t"),
+            ("GIT_COMMITTER_EMAIL", "t@example.invalid"),
+        ],
+    );
+    git(root, &["update-ref", "refs/meshtree/coord", &commit]);
+
+    // The claim is recorded (not silently dropped below the watermark)...
+    assert_exit(&meshtree(root, &["claim", &a, "src/**"]), 0);
+    let out = meshtree(root, &["sync"]);
+    assert_exit(&out, 0);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("leases: 1"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    // ...so a conflicting claim by another task is refused.
+    let out = meshtree(root, &["claim", &b, "src/main.rs"]);
+    assert_exit(&out, 20);
+    assert!(String::from_utf8_lossy(&out.stderr).contains(ERROR_CODE_CLAIM_CONFLICT));
+    // The snapshot survived the rounds.
+    let files = git(
+        root,
+        &["ls-tree", "-r", "--name-only", "refs/meshtree/coord"],
+    );
+    assert!(files.contains(&name), "{files}");
+}
