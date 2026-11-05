@@ -8,9 +8,7 @@ Anti-Bloat Constraints:
 -->
 
 ## Active Lock
-- Model: Claude Opus 5.5 (Mac)
-- Task: T-057 (fewer git processes per coord round / CLI claim)
-- Status: doing
+- (none)
 
 ## Team Roster & Roles
 - Gemini 4 Argon: Lead Architect (ADRs, cross-module scaffolding, spec design)
@@ -20,10 +18,12 @@ Anti-Bloat Constraints:
 
 ## Host & Toolchain Invariants
 - Windows Host: Missing local `link.exe` / Windows SDK. `cargo check` and `cargo fmt` work locally; full test execution links on the GitHub Actions 3-OS CI matrix.
-- Mac Host: full local gates work; `git config user.email` is a placeholder — commit with `-c user.email=109758310+Aviation-0@users.noreply.github.com`.
+- Mac Host: full local gates work (run long jobs under `caffeinate -i`: idle sleep stretches unattended runs by minutes); `git config user.email` is a placeholder — commit with `-c user.email=109758310+Aviation-0@users.noreply.github.com`.
 - Git Identity: Commits must strictly use `Lucas Pan <109758310+Aviation-0@users.noreply.github.com>`. Zero co-author trailers.
 
 ## Recent Handoff Log (Sliding window: max 5 entries)
+- 2026-11-05 | Claude Opus 5.5 (Mac): T-057 done (53/57). CLI claim 15 -> 8 git processes (tree_blobs, mktrees batch, refs_read, config fast path). CAS overhead median 219 -> 97 ms vs GitHub; all 6 rows met.
+  CI green (run 41974576911). Lock released. Next: T-036, T-045 (human sessions), then T-037/T-038.
 - 2026-11-04 | Claude Opus 5.5 (Mac): T-056 done (52/56). Bench CAS row = overhead over paired git floor (ADR-0012). Full scale vs GitHub: run 2 all 6 met (overhead p95 312 ms), run 1 miss (920 ms, noisy net).
   CI green (run 41892413976). Lock released. Next: T-036, T-045 (human sessions), then T-037/T-038.
 - 2026-11-04 | Claude Opus 5.5 (Mac): T-055 done (51/55). fetch_ref = one git fetch (glob + --prune); GitHub CAS round p95 6.96 -> 4.90 s. Git floor (fetch+push) p95 2.70 s here.
@@ -32,5 +32,3 @@ Anti-Bloat Constraints:
   CAS round p95 ~6.96 s misses 2 s (ls-remote+fetch per sync) -> T-055. Lock released. Next: T-055, T-036 (humans), T-045.
 - 2026-11-03 | Claude Opus 5.5 (Mac): T-042 done (49/54). packages/meshtree-mcp/server.json (MCP registry format, live tool list), docs/mcp.md.
   CI green (run 41703728559). Lock released. Next: T-051 (Mac), T-036; T-045 (human); release secrets + tap repos (Lucas).
-- 2026-11-03 | Claude Opus 5.5 (Windows): T-053 done. Supervisor emits one EXPIRE_SWEEP per expired lease (any machine), via WAL + bg commit; idempotent. wal: Events entries need no local task (2 lines, outside fence).
-  CI green (run 41745062452). Next: T-051 (Mac), T-036, T-045 (human).
